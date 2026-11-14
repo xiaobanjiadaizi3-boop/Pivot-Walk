@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#14161c">
+<title>Pivot Walk</title>
+<style>
+  :root {
+    --bg: #14161c;
+    --panel: #1d2029;
+    --text: #e8eaf0;
+    --muted: #8a90a2;
+    --btn: #2a2e3a;
+    --btn-active: #3a3f4f;
+    --accent: #ffd166;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    touch-action: manipulation;
+    -webkit-user-select: none; user-select: none;
+    overscroll-behavior: none;
+  }
+  #app {
+    display: flex; flex-direction: column; align-items: center;
+    height: 100%; max-width: 560px; margin: 0 auto;
+    padding: max(12px, env(safe-area-inset-top)) 16px max(12px, env(safe-area-inset-bottom));
+  }
+  header { width: 100%; display: flex; justify-content: space-between; align-items: baseline; padding: 4px 2px 10px; }
+  #stageLabel { font-size: 20px; font-weight: 700; letter-spacing: 0.05em; }
+  #info { font-size: 15px; color: var(--muted); }
+  #info b { color: var(--text); font-size: 20px; }
+  #boardWrap { position: relative; width: 100%; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; touch-action: none; }
+  #overlay {
+    position: absolute; inset: 0; display: none;
+    flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    background: rgba(10, 12, 16, 0.72); border-radius: 12px;
+  }
+  #overlay.show { display: flex; }
+  #overlay h2 { margin: 0; font-size: 44px; color: var(--accent); letter-spacing: 0.08em; }
+  #overlay p { margin: 0; font-size: 17px; }
+  #overlay .sub { color: var(--muted); font-size: 14px; }
+  .controls { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding-top: 12px; }
+  button {
+    font: inherit; font-size: 15px; color: var(--text);
+    background: var(--btn); border: none; border-radius: 10px;
+    padding: 14px 4px; touch-action: manipulation;
+  }
+  button:active { background: var(--btn-active); }
+  button:disabled { opacity: 0.35; }
+  #overlay button { background: var(--accent); color: #222; font-weight: 700; padding: 12px 28px; margin-top: 6px; }
+  .legend { width: 100%; font-size: 12px; color: var(--muted); text-align: center; padding-top: 8px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div id="stageLabel">STAGE 1</div>
+    <div id="info"><b id="moveCount">0</b> 手 <span id="parLabel"></span></div>
+  </header>
+  <div id="boardWrap">
+    <canvas id="board"></canvas>
+    <div id="overlay">
+      <h2>CLEAR!</h2>
+      <p id="clearMoves"></p>
+      <p class="sub" id="clearPar"></p>
+      <button id="btnNextOverlay">次のステージへ</button>
+    </div>
+  </div>
+  <div class="controls">
+    <button id="btnPrev">◀ 前</button>
+    <button id="btnUndo">戻す</button>
+    <button id="btnReset">リセット</button>
+    <button id="btnNext">次 ▶</button>
+  </div>
+  <div class="legend">光っているマスをタップすると、片足を軸にもう片方の足が回ります</div>
+</div>
+
+<script>
+'use strict';
+
+/* =========================================================
+ * 設定
+ * ========================================================= */
+const CONFIG = {
+  // 回転中に動く足が通過する斜めのマス C の判定（true: C が通れないと回転不可）
+  CHECK_DIAGONAL_PASS: true,
+  // 回転アニメーションの長さ（ミリ秒）
+  ANIM_MS: 180,
+};
+
+/* =========================================================
+ * マスの種類（タイル定義）
+ *   standable : 足を乗せられるか
+ *   passable  : 回転中に足が通過できるか（斜めのマス C の判定に使う）
+ *   goalFor   : そのマスをゴールとして使える足（'A' / 'B'）
+ *   onEnter   : 足が乗ったときの効果（今後の拡張用。崩れる床・スイッチ・塗りなど）
+ *   draw      : 描画方法のキー
+ * 新しいギミックはここにエントリを足し、必要なら onEnter や
+ * Game 側のフックを使って実装する。
+ * ========================================================= */
+const TILE_TYPES = {
+  wall:  { char: '#', standable: false, passable: false, goalFor: [],         draw: 'wall' },
+  floor: { char: '.', standable: true,  passable: true,  goalFor: [],         draw: 'floor' },
+  goal:  { char: 'G', standable: true,  passable: true,  goalFor: ['A', 'B'], draw: 'goal' },
+  goalA: { char: 'R', standable: true,  passable: true,  goalFor: ['A'],      draw: 'goalA' },
+  goalB: { char: 'U', standable: true,  passable: true,  goalFor: ['B'],      draw: 'goalB' },
+  // 例: 将来の拡張
+  // crumble: { char: 'C', standable: true, passable: true, goalFor: [], draw: 'crumble',
+  //            onEnter(game, x, y) { /* 足が離れたら wall に変える等 */ } },
+};
+
+// ステージ文字 → タイル種別
+const CHAR_TO_TILE = {};
+for (const [key, t] of Object.entries(TILE_TYPES)) CHAR_TO_TILE[t.char] = key;
+CHAR_TO_TILE['A'] = 'floor'; // 足Aの初期位置は床扱い
+CHAR_TO_TILE['B'] = 'floor'; // 足Bの初期位置は床扱い
+
+/* =========================================================
+ * ステージデータ
+ *   #: 壁  .: 床  A/B: 足の初期位置  G: ゴール（どちらの足でも可）
+ *   R: 足A専用ゴール  U: 足B専用ゴール
+ * どのステージも最短手順が1通りしかないことをソルバーで確認済み。
+ * ========================================================= */
+const STAGES = [
+  { name: 'はじめの一歩', map: [
+    '#####',
+    '#AB.#',
+    '#..G#',
+    '##.G#',
+    '#####',
+  ]},
+  { name: '階段', map: [
+    '#######',
+    '#AB.###',
+    '#....##',
+    '##..GG#',
+    '###...#',
+    '#######',
+  ]},
+  { name: 'くの字', map: [
+    '###########',
+    '#AB.#######',
+    '#....######',
+    '##....#####',
+    '###....####',
+    '####..G.###',
+    '###...G####',
+    '##....#####',
+    '#....######',
+    '#...#######',
+    '###########',
+  ]},
+  { name: '赤と青', map: [
+    '##########',
+    '#A..######',
+    '#B..######',
+    '#.....####',
+    '#......###',
+    '##.....###',
+    '###......#',
+    '#####..R.#',
+    '######.U.#',
+    '##########',
+  ]},
+  { name: '長い坂道', map: [
+    '##########',
+    '#G..#...##',
+    '#G......##',
+    '#......###',
+    '##....####',
+    '###....###',
+    '####.....#',
+    '####.....#',
+    '######..A#',
+    '#######.B#',
+    '#######..#',
+    '##########',
+  ]},
+];
+
+/* =========================================================
+ * ステージの読み込み
+ * ========================================================= */
+function parseStage(stage) {
+  const rows = stage.map;
+  const h = rows.length;
+  const w = Math.max(...rows.map(r => r.length));
+  const tiles = [];
+  let a = null, b = null;
+  for (let y = 0; y < h; y++) {
+    const line = [];
+    for (let x = 0; x < w; x++) {
+      const ch = rows[y][x] || '#';
+      const tile = CHAR_TO_TILE[ch];
+      if (!tile) throw new Error(`未知のマス文字 "${ch}" (${x},${y})`);
+      line.push(tile);
+      if (ch === 'A') a = { x, y };
+      if (ch === 'B') b = { x, y };
+    }
+    tiles.push(line);
+  }
+  if (!a || !b) throw new Error('A と B の初期位置が必要です');
+  if (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) !== 1) throw new Error('A と B は隣接している必要があります');
+  return { w, h, tiles, start: { a, b } };
+}
+
+/* =========================================================
+ * ルール（盤面とは独立した純粋関数。ソルバーとゲームで共用）
+ * ========================================================= */
+function tileAt(level, x, y) {
+  if (x < 0 || y < 0 || x >= level.w || y >= level.h) return null;
+  return TILE_TYPES[level.tiles[y][x]];
+}
+function canStand(level, x, y) { const t = tileAt(level, x, y); return !!t && t.standable; }
+function canPass(level, x, y)  { const t = tileAt(level, x, y); return !!t && t.passable; }
+
+/**
+ * 1手で可能な移動を列挙する。
+ * state: { a:{x,y}, b:{x,y} }
+ * 戻り値: [{ pivot:'a'|'b', dir:+1|-1, to:{x,y}, pass:{x,y} }]
+ * 同じマスへ2通りで行ける場合は最初の1つだけを採用する。
+ */
+function getMoves(level, state) {
+  const result = [];
+  const seen = new Set();
+  for (const pivotKey of ['a', 'b']) {
+    const moverKey = pivotKey === 'a' ? 'b' : 'a';
+    const p = state[pivotKey], m = state[moverKey];
+    const dx = m.x - p.x, dy = m.y - p.y;
+    // dir +1: 画面上で時計回り（y 軸下向き）、-1: 反時計回り
+    for (const dir of [1, -1]) {
+      const nx = dir === 1 ? -dy : dy;
+      const ny = dir === 1 ? dx : -dx;
+      const to = { x: p.x + nx, y: p.y + ny };
+      if (!canStand(level, to.x, to.y)) continue;
+      const pass = { x: m.x + to.x - p.x, y: m.y + to.y - p.y };
+      if (CONFIG.CHECK_DIAGONAL_PASS && !canPass(level, pass.x, pass.y)) continue;
+      const key = to.x + ',' + to.y;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({ pivot: pivotKey, mover: moverKey, dir, to, pass });
+    }
+  }
+  return result;
+}
+
+function applyMove(state, move) {
+  const next = { a: { ...state.a }, b: { ...state.b } };
+  next[move.mover] = { ...move.to };
+  return next;
+}
+
+/**
+ * ゴール判定。ゴールの種類を増やすときはここを拡張する
+ * （例: 全マス塗りつぶしなら level.goalType を見て分岐）。
+ */
+function isGoal(level, state) {
+  const ta = tileAt(level, state.a.x, state.a.y);
+  const tb = tileAt(level, state.b.x, state.b.y);
+  return ta.goalFor.includes('A') && tb.goalFor.includes('B');
+}
+
+/* =========================================================
+ * 検証用ソルバー（幅優先探索）
+ * 状態 = (足Aの位置, 足Bの位置)
+ * 戻り値: { moves: 最短手数 or -1, count: 最短手順の数, path: [move...] }
+ * ========================================================= */
+function stateKey(s) { return s.a.x + ',' + s.a.y + '|' + s.b.x + ',' + s.b.y; }
+
+function solve(level) {
+  const start = level.start;
+  const startKey = stateKey(start);
+  const info = new Map([[startKey, { dist: 0, count: 1, prev: null, move: null, state: start }]]);
+  let frontier = [start];
+  let found = null, foundCount = 0;
+  while (frontier.length && !found) {
+    const next = [];
+    for (const s of frontier) {
+      const k = stateKey(s);
+      const cur = info.get(k);
+      if (isGoal(level, s)) {
+        foundCount += cur.count;
+        if (!found) found = k;
+        continue;
+      }
+      for (const mv of getMoves(level, s)) {
+        const ns = applyMove(s, mv);
+        const nk = stateKey(ns);
+        const ex = info.get(nk);
+        if (!ex) {
+          info.set(nk, { dist: cur.dist + 1, count: cur.count, prev: k, move: mv, state: ns });
+          next.push(ns);
+        } else if (ex.dist === cur.dist + 1) {
+          ex.count += cur.count;
+        }
+      }
+    }
+    if (found) break;
+    frontier = next;
+  }
+  if (!found) return { moves: -1, count: 0, path: [] };
+  const path = [];
+  for (let k = found; info.get(k).prev; k = info.get(k).prev) path.unshift(info.get(k).move);
+  return { moves: info.get(found).dist, count: foundCount, path };
+}
+
+function verifyAllStages() {
+  const results = [];
+  STAGES.forEach((st, i) => {
+    let r;
+    try {
+      r = solve(parseStage(st));
+    } catch (e) {
+      console.warn(`ステージ${i + 1}: 読み込みエラー - ${e.message}`);
+      results.push(null);
+      return;
+    }
+    if (r.moves < 0) {
+      console.warn(`ステージ${i + 1}: 解けません！`);
+    } else {
+      console.log(`ステージ${i + 1}: 最短${r.moves}手` + (r.count > 1 ? `（最短手順が${r.count}通りあります）` : ''));
+    }
+    results.push(r);
+  });
+  return results;
+}
+
+/* =========================================================
+ * ゲーム本体
+ * ========================================================= */
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+const boardWrap = document.getElementById('boardWrap');
+const overlay = document.getElementById('overlay');
+const el = id => document.getElementById(id);
+
+const COLORS = {
+  floor: '#262a35',
+  floorLine: '#323745',
+  wall: '#14161c',
+  goal: '#ffd166',
+  footA: '#ef476f',
+  footB: '#3a86ff',
+  leg: 'rgba(230, 232, 240, 0.55)',
+  hint: 'rgba(255, 255, 255, 0.13)',
+  hintRing: 'rgba(255, 255, 255, 0.35)',
+};
+
+const game = {
+  stageIndex: 0,
+  level: null,
+  state: null,
+  history: [],
+  moves: 0,
+  cleared: false,
+  anim: null,          // { move, from, start }
+  layout: { cell: 40, ox: 0, oy: 0 },
+  par: [],
+};
+
+function loadStage(index) {
+  game.stageIndex = (index + STAGES.length) % STAGES.length;
+  game.level = parseStage(STAGES[game.stageIndex]);
+  game.state = { a: { ...game.level.start.a }, b: { ...game.level.start.b } };
+  game.history = [];
+  game.moves = 0;
+  game.cleared = false;
+  game.anim = null;
+  overlay.classList.remove('show');
+  resize();
+  updateHud();
+}
+
+function updateHud() {
+  const st = STAGES[game.stageIndex];
+  el('stageLabel').textContent = `STAGE ${game.stageIndex + 1}` + (st.name ? `  ${st.name}` : '');
+  el('moveCount').textContent = game.moves;
+  const par = game.par[game.stageIndex];
+  el('parLabel').textContent = par && par.moves >= 0 ? `/ 最短 ${par.moves}` : '';
+  el('btnUndo').disabled = game.history.length === 0 || game.cleared;
+  el('btnReset').disabled = game.history.length === 0 && !game.cleared;
+}
+
+function tryMove(move) {
+  if (game.anim || game.cleared) return;
+  game.history.push(game.state);
+  const from = game.state;
+  game.state = applyMove(game.state, move);
+  game.moves++;
+  game.anim = { move, from, start: performance.now() };
+  // 将来の拡張: 乗ったマスの効果
+  const t = tileAt(game.level, move.to.x, move.to.y);
+  if (t.onEnter) t.onEnter(game, move.to.x, move.to.y, move.mover);
+  updateHud();
+  requestAnimationFrame(frame);
+}
+
+function onAnimEnd() {
+  game.anim = null;
+  if (isGoal(game.level, game.state)) {
+    game.cleared = true;
+    const par = game.par[game.stageIndex];
+    el('clearMoves').textContent = `${game.moves} 手でクリア`;
+    el('clearPar').textContent = par && par.moves >= 0
+      ? (game.moves <= par.moves ? '最短手数です！' : `最短は ${par.moves} 手`)
+      : '';
+    el('btnNextOverlay').textContent = game.stageIndex === STAGES.length - 1 ? '最初のステージへ' : '次のステージへ';
+    overlay.classList.add('show');
+    updateHud();
+  }
+}
+
+function undo() {
+  if (game.anim || game.cleared || !game.history.length) return;
+  game.state = game.history.pop();
+  game.moves--;
+  updateHud();
+  draw();
+}
+
+/* ---------------- レイアウト ---------------- */
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const availW = boardWrap.clientWidth;
+  const availH = boardWrap.clientHeight;
+  const { w, h } = game.level;
+  const cell = Math.max(8, Math.floor(Math.min(availW / w, availH / h)));
+  const cw = cell * w, ch = cell * h;
+  canvas.style.width = cw + 'px';
+  canvas.style.height = ch + 'px';
+  canvas.width = Math.round(cw * dpr);
+  canvas.height = Math.round(ch * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  game.layout = { cell, w: cw, h: ch };
+  overlay.style.width = cw + 'px';
+  overlay.style.height = ch + 'px';
+  overlay.style.inset = 'auto';
+  draw();
+}
+
+/* ---------------- 描画 ---------------- */
+function cellCenter(x, y) {
+  const c = game.layout.cell;
+  return { x: (x + 0.5) * c, y: (y + 0.5) * c };
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawTile(kind, x, y) {
+  const c = game.layout.cell;
+  const px = x * c, py = y * c;
+  if (kind === 'wall') return;
+  ctx.fillStyle = COLORS.floor;
+  ctx.fillRect(px, py, c, c);
+  ctx.strokeStyle = COLORS.floorLine;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(px + 0.5, py + 0.5, c - 1, c - 1);
+  const m = c * 0.16;
+  if (kind === 'goal' || kind === 'goalA' || kind === 'goalB') {
+    const col = kind === 'goal' ? COLORS.goal : kind === 'goalA' ? COLORS.footA : COLORS.footB;
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = col;
+    roundRect(px + m, py + m, c - 2 * m, c - 2 * m, c * 0.12);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = Math.max(2, c * 0.06);
+    roundRect(px + m, py + m, c - 2 * m, c - 2 * m, c * 0.12);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawFoot(pos, color, label) {
+  const c = game.layout.cell;
+  const r = c * 0.33;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.45)';
+  ctx.shadowBlur = c * 0.12;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.font = `700 ${Math.round(c * 0.3)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, pos.x, pos.y + 1);
+}
+
+function draw(now) {
+  const { level, layout } = game;
+  if (!level) return;
+  ctx.clearRect(0, 0, layout.w, layout.h);
+
+  for (let y = 0; y < level.h; y++)
+    for (let x = 0; x < level.w; x++)
+      drawTile(TILE_TYPES[level.tiles[y][x]].draw, x, y);
+
+  // 足の位置（アニメーション中は動く足を弧に沿って補間）
+  let posA = cellCenter(game.state.a.x, game.state.a.y);
+  let posB = cellCenter(game.state.b.x, game.state.b.y);
+  let animating = false;
+  if (game.anim) {
+    const t = Math.min(1, ((now || performance.now()) - game.anim.start) / CONFIG.ANIM_MS);
+    const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad
+    const { move, from } = game.anim;
+    const p = cellCenter(from[move.pivot].x, from[move.pivot].y);
+    const m0 = cellCenter(from[move.mover].x, from[move.mover].y);
+    const a0 = Math.atan2(m0.y - p.y, m0.x - p.x);
+    const ang = a0 + move.dir * (Math.PI / 2) * e;
+    const rad = layout.cell;
+    const mp = { x: p.x + Math.cos(ang) * rad, y: p.y + Math.sin(ang) * rad };
+    if (move.mover === 'a') posA = mp; else posB = mp;
+    animating = t < 1;
+  }
+
+  // 移動候補のハイライト
+  if (!game.anim && !game.cleared) {
+    const c = layout.cell;
+    for (const mv of getMoves(level, game.state)) {
+      const cc = cellCenter(mv.to.x, mv.to.y);
+      ctx.fillStyle = COLORS.hint;
+      roundRect(mv.to.x * c + 3, mv.to.y * c + 3, c - 6, c - 6, c * 0.14);
+      ctx.fill();
+      ctx.strokeStyle = mv.mover === 'a' ? 'rgba(239,71,111,0.6)' : 'rgba(58,134,255,0.6)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cc.x, cc.y, c * 0.14, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  // 両足をつなぐ脚
+  ctx.strokeStyle = COLORS.leg;
+  ctx.lineWidth = layout.cell * 0.14;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(posA.x, posA.y);
+  ctx.lineTo(posB.x, posB.y);
+  ctx.stroke();
+
+  drawFoot(posA, COLORS.footA, 'A');
+  drawFoot(posB, COLORS.footB, 'B');
+
+  return animating;
+}
+
+function frame(now) {
+  const still = draw(now);
+  if (still) requestAnimationFrame(frame);
+  else if (game.anim) { onAnimEnd(); draw(); }
+}
+
+/* ---------------- 入力 ---------------- */
+canvas.addEventListener('pointerdown', ev => {
+  ev.preventDefault();
+  if (game.anim || game.cleared) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.floor((ev.clientX - rect.left) / game.layout.cell);
+  const y = Math.floor((ev.clientY - rect.top) / game.layout.cell);
+  const mv = getMoves(game.level, game.state).find(m => m.to.x === x && m.to.y === y);
+  if (mv) tryMove(mv);
+});
+
+// ダブルタップ・ピンチによるズームを防ぐ
+document.addEventListener('dblclick', e => e.preventDefault(), { passive: false });
+document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
+let lastTouchEnd = 0;
+document.addEventListener('touchend', e => {
+  const now = Date.now();
+  if (now - lastTouchEnd < 350) e.preventDefault();
+  lastTouchEnd = now;
+}, { passive: false });
+
+el('btnUndo').addEventListener('click', undo);
+el('btnReset').addEventListener('click', () => loadStage(game.stageIndex));
+el('btnPrev').addEventListener('click', () => loadStage(game.stageIndex - 1));
+el('btnNext').addEventListener('click', () => loadStage(game.stageIndex + 1));
+el('btnNextOverlay').addEventListener('click', () => loadStage(game.stageIndex + 1));
+window.addEventListener('keydown', e => {
+  if (e.key === 'z' || e.key === 'Backspace') undo();
+  if (e.key === 'r') loadStage(game.stageIndex);
+});
+window.addEventListener('resize', resize);
+
+/* ---------------- 起動 ---------------- */
+game.par = verifyAllStages();
+loadStage(0);
+</script>
+</body>
+</html>
