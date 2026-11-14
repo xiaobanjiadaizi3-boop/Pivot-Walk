@@ -77,7 +77,7 @@
     <button id="btnReset">リセット</button>
     <button id="btnNext">次 ▶</button>
   </div>
-  <div class="legend">光っているマスをタップすると、片足を軸にもう片方の足が回ります</div>
+  <div class="legend">光っているマスをタップすると片足を軸に回転。三角形は斜めの面の側からならかすめて通れます</div>
 </div>
 
 <script>
@@ -97,18 +97,37 @@ const CONFIG = {
  * マスの種類（タイル定義）
  *   standable : 足を乗せられるか
  *   passable  : 回転中に足が通過できるか（斜めのマス C の判定に使う）
+ *               true / false、または関数 (dx, dy) => boolean
+ *               (dx, dy) は「軸の足 → 通過マス C」の向き（各成分 ±1）
  *   goalFor   : そのマスをゴールとして使える足（'A' / 'B'）
  *   onEnter   : 足が乗ったときの効果（今後の拡張用。崩れる床・スイッチ・塗りなど）
  *   draw      : 描画方法のキー
  * 新しいギミックはここにエントリを足し、必要なら onEnter や
  * Game 側のフックを使って実装する。
  * ========================================================= */
+
+/**
+ * 三角形の地形。マスの対角線で半分が埋まっている（solid = 埋まっている角の向き）。
+ * 足は乗れない。回転中の足は「軸の足に近い側の角」をかすめて通るので、
+ * 埋まっている角が軸の足と反対側を向いているときだけ通過できる。
+ */
+function triangleTile(char, sx, sy) {
+  return {
+    char, standable: false, goalFor: [], draw: 'triangle', solid: { x: sx, y: sy },
+    passable: (dx, dy) => dx === sx && dy === sy,
+  };
+}
+
 const TILE_TYPES = {
   wall:  { char: '#', standable: false, passable: false, goalFor: [],         draw: 'wall' },
   floor: { char: '.', standable: true,  passable: true,  goalFor: [],         draw: 'floor' },
   goal:  { char: 'G', standable: true,  passable: true,  goalFor: ['A', 'B'], draw: 'goal' },
   goalA: { char: 'R', standable: true,  passable: true,  goalFor: ['A'],      draw: 'goalA' },
   goalB: { char: 'U', standable: true,  passable: true,  goalFor: ['B'],      draw: 'goalB' },
+  triTL: triangleTile('r', -1, -1), // ◤ 左上が埋まっている
+  triTR: triangleTile('7',  1, -1), // ◥ 右上が埋まっている
+  triBL: triangleTile('L', -1,  1), // ◣ 左下が埋まっている
+  triBR: triangleTile('J',  1,  1), // ◢ 右下が埋まっている
   // 例: 将来の拡張
   // crumble: { char: 'C', standable: true, passable: true, goalFor: [], draw: 'crumble',
   //            onEnter(game, x, y) { /* 足が離れたら wall に変える等 */ } },
@@ -122,64 +141,121 @@ CHAR_TO_TILE['B'] = 'floor'; // 足Bの初期位置は床扱い
 
 /* =========================================================
  * ステージデータ
- *   #: 壁  .: 床  A/B: 足の初期位置  G: ゴール（どちらの足でも可）
- *   R: 足A専用ゴール  U: 足B専用ゴール
- * どのステージも最短手順が1通りしかないことをソルバーで確認済み。
+ *   #: 壁  .: 床  A/B: 足の初期位置
+ *   G: ゴール（どちらの足でも可。G があるときは両足とも G に乗る）
+ *   R: 足A専用ゴール（R だけのステージなら「足Aが R に乗ればクリア」）
+ *   U: 足B専用ゴール
+ *   三角形（足は乗れない。埋まっている角の向きで通過の可否が変わる）
+ *     r: ◤ 左上   7: ◥ 右上   L: ◣ 左下   J: ◢ 右下
+ * どのステージも最短ルートが1通りしかないことをソルバーで確認済み
+ * （同じ2×2の中を右回り／左回りするだけの違いは同じルートとみなす）。
  * ========================================================= */
 const STAGES = [
-  { name: 'はじめの一歩', map: [
-    '#####',
-    '#AB.#',
-    '#..G#',
-    '##.G#',
-    '#####',
+  { name: '三角の坂', map: [
+    '########',
+    '#AB7####',
+    '#L..7###',
+    '##L..7##',
+    '###L..7#',
+    '####LR.#',
+    '########',
   ]},
-  { name: '階段', map: [
-    '#######',
-    '#AB.###',
-    '#....##',
-    '##..GG#',
-    '###...#',
-    '#######',
+  { name: '小部屋', map: [
+    '########',
+    '####..##',
+    '####..7#',
+    '###r..R#',
+    '##r....#',
+    '#r....J#',
+    '#.....##',
+    '#L..7###',
+    '#AB...##',
+    '#L....##',
+    '########',
   ]},
-  { name: 'くの字', map: [
-    '###########',
-    '#AB.#######',
-    '#....######',
-    '##....#####',
-    '###....####',
-    '####..G.###',
-    '###...G####',
-    '##....#####',
-    '#....######',
-    '#...#######',
-    '###########',
+  { name: '回り道', map: [
+    '#########',
+    '#####r.R#',
+    '#r.7r...#',
+    '#......J#',
+    '#....J###',
+    '#r..J####',
+    '#...#####',
+    '#..7#####',
+    '#LAB#####',
+    '##.J#####',
+    '#########',
   ]},
-  { name: '赤と青', map: [
-    '##########',
-    '#A..######',
-    '#B..######',
-    '#.....####',
-    '#......###',
-    '##.....###',
-    '###......#',
-    '#####..R.#',
-    '######.U.#',
-    '##########',
+  { name: '長い下り坂', map: [
+    '#########',
+    '#A7######',
+    '#B.7#####',
+    '#...7####',
+    '##L...###',
+    '###...7##',
+    '####L...#',
+    '#####L..#',
+    '#####r..#',
+    '####r...#',
+    '####GGJ##',
+    '#########',
   ]},
-  { name: '長い坂道', map: [
-    '##########',
-    '#G..#...##',
-    '#G......##',
-    '#......###',
-    '##....####',
-    '###....###',
-    '####.....#',
-    '####.....#',
-    '######..A#',
-    '#######.B#',
-    '#######..#',
-    '##########',
+  { name: '広場の先', map: [
+    '#########',
+    '####.R###',
+    '##.7..7##',
+    '#r.....##',
+    '#.....J##',
+    '#L...7###',
+    '###L...##',
+    '####L..7#',
+    '#####...#',
+    '#####r..#',
+    '#####.AB#',
+    '#####L.J#',
+    '#########',
+  ]},
+  { name: '近くて遠い', map: [
+    '#########',
+    '####r.###',
+    '###r..7##',
+    '##r....7#',
+    '#r...L..#',
+    '#...Rr..#',
+    '#L..r..J#',
+    '###r..J##',
+    '##r..J###',
+    '##A.J####',
+    '##BJ#####',
+    '#########',
+  ]},
+  { name: '折り返し', map: [
+    '#########',
+    '###...7##',
+    '##r....7#',
+    '#rABJL..#',
+    '#...#r..#',
+    '#.J#r..J#',
+    '###r..J##',
+    '##r..J###',
+    '#r..J####',
+    '#...#####',
+    '#RJ######',
+    '#########',
+  ]},
+  { name: 'すぐ隣のゴール', map: [
+    '#########',
+    '#####rAB#',
+    '####r..J#',
+    '###r..J##',
+    '##...J###',
+    '#r..J#rG#',
+    '#..J#r.G#',
+    '#..7r..J#',
+    '#L....J##',
+    '##L...###',
+    '###L.J###',
+    '#########',
   ]},
 ];
 
@@ -206,7 +282,14 @@ function parseStage(stage) {
   }
   if (!a || !b) throw new Error('A と B の初期位置が必要です');
   if (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) !== 1) throw new Error('A と B は隣接している必要があります');
-  return { w, h, tiles, start: { a, b } };
+  const goals = { A: { own: false, shared: false }, B: { own: false, shared: false } };
+  for (const line of tiles) for (const key of line) {
+    const gf = TILE_TYPES[key].goalFor;
+    if (gf.length === 2) goals.A.shared = goals.B.shared = true;
+    else if (gf.length === 1) goals[gf[0]].own = true;
+  }
+  if (!goals.A.own && !goals.A.shared && !goals.B.own && !goals.B.shared) throw new Error('ゴールがありません');
+  return { w, h, tiles, start: { a, b }, goals };
 }
 
 /* =========================================================
@@ -217,7 +300,12 @@ function tileAt(level, x, y) {
   return TILE_TYPES[level.tiles[y][x]];
 }
 function canStand(level, x, y) { const t = tileAt(level, x, y); return !!t && t.standable; }
-function canPass(level, x, y)  { const t = tileAt(level, x, y); return !!t && t.passable; }
+// (dx, dy): 軸の足から見た通過マスの向き。三角形は向きによって通れる／通れないが変わる
+function canPass(level, x, y, dx, dy) {
+  const t = tileAt(level, x, y);
+  if (!t) return false;
+  return typeof t.passable === 'function' ? t.passable(dx, dy) : t.passable;
+}
 
 /**
  * 1手で可能な移動を列挙する。
@@ -239,7 +327,7 @@ function getMoves(level, state) {
       const to = { x: p.x + nx, y: p.y + ny };
       if (!canStand(level, to.x, to.y)) continue;
       const pass = { x: m.x + to.x - p.x, y: m.y + to.y - p.y };
-      if (CONFIG.CHECK_DIAGONAL_PASS && !canPass(level, pass.x, pass.y)) continue;
+      if (CONFIG.CHECK_DIAGONAL_PASS && !canPass(level, pass.x, pass.y, pass.x - p.x, pass.y - p.y)) continue;
       const key = to.x + ',' + to.y;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -260,53 +348,91 @@ function applyMove(state, move) {
  * （例: 全マス塗りつぶしなら level.goalType を見て分岐）。
  */
 function isGoal(level, state) {
-  const ta = tileAt(level, state.a.x, state.a.y);
-  const tb = tileAt(level, state.b.x, state.b.y);
-  return ta.goalFor.includes('A') && tb.goalFor.includes('B');
+  return footOk(level, 'A', state.a) && footOk(level, 'B', state.b);
+}
+// 足ごとのゴール条件:
+//   専用ゴール（A なら R、B なら U）があればそこに乗る
+//   なければ共通ゴール G があれば G に乗る
+//   どちらもなければ、その足はどこにいてもよい
+function footOk(level, foot, pos) {
+  const t = tileAt(level, pos.x, pos.y);
+  const g = level.goals[foot];
+  if (g.own) return t.goalFor.length === 1 && t.goalFor[0] === foot;
+  if (g.shared) return t.goalFor.length === 2;
+  return true;
 }
 
 /* =========================================================
  * 検証用ソルバー（幅優先探索）
  * 状態 = (足Aの位置, 足Bの位置)
- * 戻り値: { moves: 最短手数 or -1, count: 最短手順の数, path: [move...] }
+ * 戻り値: {
+ *   moves : 最短手数（解けなければ -1）
+ *   count : 最短手順の数
+ *   routes: 最短ルートの数（同じ2×2の中を右回り／左回りするだけの違いは同じとみなす）
+ *   path  : 最短手順の一例 [move...]
+ * }
  * ========================================================= */
 function stateKey(s) { return s.a.x + ',' + s.a.y + '|' + s.b.x + ',' + s.b.y; }
 
-function solve(level) {
+function solve(level, routeLimit = 5000) {
   const start = level.start;
   const startKey = stateKey(start);
-  const info = new Map([[startKey, { dist: 0, count: 1, prev: null, move: null, state: start }]]);
+  const info = new Map([[startKey, { dist: 0, count: 1, preds: [], move: null, state: start }]]);
   let frontier = [start];
-  let found = null, foundCount = 0;
-  while (frontier.length && !found) {
+  const goals = [];
+  while (frontier.length && !goals.length) {
     const next = [];
     for (const s of frontier) {
       const k = stateKey(s);
       const cur = info.get(k);
-      if (isGoal(level, s)) {
-        foundCount += cur.count;
-        if (!found) found = k;
-        continue;
-      }
+      if (isGoal(level, s)) { goals.push(k); continue; }
       for (const mv of getMoves(level, s)) {
         const ns = applyMove(s, mv);
         const nk = stateKey(ns);
         const ex = info.get(nk);
         if (!ex) {
-          info.set(nk, { dist: cur.dist + 1, count: cur.count, prev: k, move: mv, state: ns });
+          info.set(nk, { dist: cur.dist + 1, count: cur.count, preds: [k], move: mv, state: ns });
           next.push(ns);
         } else if (ex.dist === cur.dist + 1) {
           ex.count += cur.count;
+          ex.preds.push(k);
         }
       }
     }
-    if (found) break;
     frontier = next;
   }
-  if (!found) return { moves: -1, count: 0, path: [] };
+  if (!goals.length) return { moves: -1, count: 0, routes: 0, path: [] };
+
   const path = [];
-  for (let k = found; info.get(k).prev; k = info.get(k).prev) path.unshift(info.get(k).move);
-  return { moves: info.get(found).dist, count: foundCount, path };
+  for (let k = goals[0]; info.get(k).preds.length; k = info.get(k).preds[0]) path.unshift(info.get(k).move);
+  const count = goals.reduce((n, k) => n + info.get(k).count, 0);
+
+  // ルート数: 最短手順を列挙し、「2手で同じ2×2の向かい合う辺へ移る」途中の状態を同一視して数える
+  const cellsOf = k => { const s = info.get(k).state; return [s.a, s.b]; };
+  const isDetour = (k1, k3) => {
+    const c = [...cellsOf(k1), ...cellsOf(k3)];
+    if (new Set(c.map(p => p.x + ',' + p.y)).size !== 4) return false;
+    const xs = c.map(p => p.x), ys = c.map(p => p.y);
+    return Math.max(...xs) - Math.min(...xs) === 1 && Math.max(...ys) - Math.min(...ys) === 1;
+  };
+  const sigs = new Set();
+  let enumerated = 0;
+  const stack = [];
+  const walk = k => {
+    if (enumerated > routeLimit) return;
+    stack.push(k);
+    if (k === startKey) {
+      enumerated++;
+      const p = stack.slice().reverse();
+      sigs.add(p.map((v, i) => (i > 0 && i < p.length - 1 && isDetour(p[i - 1], p[i + 1])) ? '*' : v).join(' '));
+    } else {
+      for (const pk of info.get(k).preds) walk(pk);
+    }
+    stack.pop();
+  };
+  for (const g of goals) walk(g);
+  const routes = enumerated > routeLimit ? Infinity : sigs.size;
+  return { moves: info.get(goals[0]).dist, count, routes, path };
 }
 
 function verifyAllStages() {
@@ -323,7 +449,8 @@ function verifyAllStages() {
     if (r.moves < 0) {
       console.warn(`ステージ${i + 1}: 解けません！`);
     } else {
-      console.log(`ステージ${i + 1}: 最短${r.moves}手` + (r.count > 1 ? `（最短手順が${r.count}通りあります）` : ''));
+      console.log(`ステージ${i + 1}: 最短${r.moves}手`);
+      if (r.routes > 1) console.warn(`ステージ${i + 1}: 最短ルートが${r.routes === Infinity ? '多数' : r.routes + '通り'}あります`);
     }
     results.push(r);
   });
@@ -343,6 +470,8 @@ const COLORS = {
   floor: '#262a35',
   floorLine: '#323745',
   wall: '#14161c',
+  block: '#3a3f50',
+  slopeEdge: '#5b6278',
   goal: '#ffd166',
   footA: '#ef476f',
   footB: '#3a86ff',
@@ -459,15 +588,49 @@ function roundRect(x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawTile(kind, x, y) {
+function isOpenCell(x, y) {
+  const t = tileAt(game.level, x, y);
+  return !!t && t.draw !== 'wall';
+}
+
+function drawTile(tile, x, y) {
+  const kind = tile.draw;
   const c = game.layout.cell;
   const px = x * c, py = y * c;
-  if (kind === 'wall') return;
+  if (kind === 'wall') {
+    // 床に接している壁だけブロックとして描く
+    let near = false;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (isOpenCell(x + dx, y + dy)) near = true;
+    if (near) {
+      ctx.fillStyle = COLORS.block;
+      ctx.fillRect(px, py, c, c);
+    }
+    return;
+  }
   ctx.fillStyle = COLORS.floor;
   ctx.fillRect(px, py, c, c);
   ctx.strokeStyle = COLORS.floorLine;
   ctx.lineWidth = 1;
   ctx.strokeRect(px + 0.5, py + 0.5, c - 1, c - 1);
+  if (kind === 'triangle') {
+    // 埋まっている角を頂点とする直角三角形
+    const sx = tile.solid.x, sy = tile.solid.y;
+    const cx = sx > 0 ? px + c : px, cy = sy > 0 ? py + c : py;
+    ctx.fillStyle = COLORS.block;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(sx > 0 ? px : px + c, cy);
+    ctx.lineTo(cx, sy > 0 ? py : py + c);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = COLORS.slopeEdge;
+    ctx.lineWidth = Math.max(1.5, c * 0.04);
+    ctx.beginPath();
+    ctx.moveTo(sx > 0 ? px : px + c, cy);
+    ctx.lineTo(cx, sy > 0 ? py : py + c);
+    ctx.stroke();
+    return;
+  }
   const m = c * 0.16;
   if (kind === 'goal' || kind === 'goalA' || kind === 'goalB') {
     const col = kind === 'goal' ? COLORS.goal : kind === 'goalA' ? COLORS.footA : COLORS.footB;
@@ -510,7 +673,7 @@ function draw(now) {
 
   for (let y = 0; y < level.h; y++)
     for (let x = 0; x < level.w; x++)
-      drawTile(TILE_TYPES[level.tiles[y][x]].draw, x, y);
+      drawTile(TILE_TYPES[level.tiles[y][x]], x, y);
 
   // 足の位置（アニメーション中は動く足を弧に沿って補間）
   let posA = cellCenter(game.state.a.x, game.state.a.y);
