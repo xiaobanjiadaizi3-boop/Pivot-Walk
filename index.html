@@ -208,8 +208,9 @@ const CONFIG = {
  *               true / false、または関数 (dx, dy) => boolean
  *               (dx, dy) は「軸の足 → 通過マス C」の向き（各成分 ±1）
  *   goalFor   : そのマスをゴールとして使える足（'A' / 'B'）
- *   bump      : マスの辺に乗った小さな三角形。{x,y} はその辺の向き。
- *               回転中の足はその辺をまたげない（足は乗れる）
+ *   passEdge  : 斜めの姿勢のまま90°回るとき、足がマスの「辺ぞい」をかすめて通れるか。
+ *               関数 (fx, fy) => boolean。(fx, fy) はかすめる辺の向き（軸から遠い側）。
+ *               省略時は passable が true なら通れる
  *   stop45    : 回転の途中（45°）で止まれるマス
  *   onEnter / onLeave : 足が乗った／離れたときの効果。
  *               (s, level, idx) を受け取り、状態 s（コピー済み）を書き換える
@@ -223,11 +224,20 @@ function triangleTile(char, sx, sy, label) {
   return {
     char, label, standable: false, goalFor: [], draw: 'triangle', solid: { x: sx, y: sy },
     passable: (dx, dy) => dx === sx && dy === sy,
+    // 埋まった直角三角形の2辺（(sx,0) と (0,sy) の辺）ぞいは通れない
+    passEdge: (fx, fy) => !((fx === sx && fy === 0) || (fy === sy && fx === 0)),
   };
 }
-/** 辺の上の小さな三角形（でっぱり）。(ex, ey) はでっぱりが乗っている辺の向き。 */
-function bumpTile(char, ex, ey, label) {
-  return { char, label, standable: true, passable: true, goalFor: [], draw: 'bump', bump: { x: ex, y: ey } };
+/** 山形の三角形。底辺がマスの1辺 (ex, ey) にあり、頂点がマスの中心。足は乗れない。
+ *  回転中の足は、底辺と反対側の2つの角のどちらをかすめる場合も通れる（直角三角形より通れる向きが多い）。 */
+function peakTile(char, ex, ey, label) {
+  return {
+    char, label, standable: false, goalFor: [], draw: 'peak', base: { x: ex, y: ey },
+    // 軸に近い角が底辺の反対側にあれば通れる
+    passable: (dx, dy) => dx * ex + dy * ey > 0,
+    // 辺ぞいは、底辺の反対側の辺だけ通れる
+    passEdge: (fx, fy) => fx === -ex && fy === -ey,
+  };
 }
 
 const TILE_TYPES = {
@@ -240,10 +250,10 @@ const TILE_TYPES = {
   triTR: triangleTile('7',  1, -1, '三角◥'),
   triBL: triangleTile('L', -1,  1, '三角◣'),
   triBR: triangleTile('J',  1,  1, '三角◢'),
-  bumpS: bumpTile('^',  0,  1, '突起 下'), // 下の辺に乗って上を向く（画像の黄色い三角）
-  bumpN: bumpTile('v',  0, -1, '突起 上'),
-  bumpW: bumpTile('>', -1,  0, '突起 左'),
-  bumpE: bumpTile('<',  1,  0, '突起 右'),
+  peakU: peakTile('^',  0,  1, '山 ▲'), // 底辺が下、上向き
+  peakD: peakTile('v',  0, -1, '山 ▼'),
+  peakR: peakTile('>', -1,  0, '山 ▶'),
+  peakL: peakTile('<',  1,  0, '山 ◀'),
   stop:  { char: 'O', label: '45°止め', standable: true, passable: true, goalFor: [], draw: 'stop', stop45: true },
   crumble: {
     char: 'C', label: '崩れる床', standable: true, passable: true, goalFor: [], draw: 'crumble',
@@ -277,9 +287,9 @@ function setBit(str, i) { return str.slice(0, i) + '1' + str.slice(i + 1); }
  *   R: 足A専用ゴール（R だけなら「足Aが R に乗ればクリア」）  U: 足B専用ゴール
  *   三角形（足は乗れない。埋まっている角の向きで通過の可否が変わる）
  *     r: ◤ 左上   7: ◥ 右上   L: ◣ 左下   J: ◢ 右下
- *   突起（辺に乗った小さな三角形。足は乗れるが、回転中にその辺をまたげない）
- *     ^: 下の辺   v: 上の辺   >: 左の辺   <: 右の辺
- *   O: 45°止め（回転の途中で斜めに止まれる）
+ *   山形の三角形（足は乗れない。頂点側の2つの角のどちらからでもかすめて通れる）
+ *     ^: ▲   v: ▼   >: ▶   <: ◀
+ *   O: 45°止め（回転の途中で斜めに止まれる。斜めのまま90°回ることもできる）
  *   C: 崩れる床（足が離れると穴になる。穴の上は回転で通過はできる）
  *   S: スイッチ（足が乗るたびに扉が開閉）  D: 扉（最初は閉）  d: 扉（最初は開）
  *   P: 塗りマス（すべてのPを踏むとクリア条件を満たす。G/R/U と組み合わせると両方必要）
@@ -392,22 +402,30 @@ const STAGES = [
     '#########',
   ]},
   // ---- ここから新ギミックのお試しステージ ----
-  { name: 'でっぱり', map: [
+  { name: '山を越える', map: [
+    '#######',
+    '#.r.7.#',
+    '#r...7#',
+    '#AB^.R#',
+    '####..#',
+    '#######',
+  ]},
+  { name: '山形の道', map: [
     '######',
-    '#.<.G#',
-    '#...G#',
-    '#...##',
-    '##.AB#',
-    '##...#',
+    '#A..v#',
+    '#B...#',
+    '###..#',
+    '#G...#',
+    '#G...#',
     '######',
   ]},
   { name: '45°で止まる', map: [
     '######',
-    '##.O##',
-    '#J..##',
+    '#.RJO#',
+    '#.r.O#',
     '#...##',
-    '#r..R#',
-    '##AB.#',
+    '#....#',
+    '##.AB#',
     '######',
   ]},
   { name: '崩れる床', map: [
@@ -519,13 +537,12 @@ function canPass(level, s, x, y, dx, dy) {
   if (!t) return false;
   return typeof t.passable === 'function' ? t.passable(dx, dy) : t.passable;
 }
-/** 隣り合う2マスの境目を、回転中の足がまたげるか（突起があるとまたげない） */
-function edgeBlocked(level, s, p, q) {
-  const dx = q.x - p.x, dy = q.y - p.y;
-  const tp = effTile(level, s, p.x, p.y), tq = effTile(level, s, q.x, q.y);
-  if (tp && tp.bump && tp.bump.x === dx && tp.bump.y === dy) return true;
-  if (tq && tq.bump && tq.bump.x === -dx && tq.bump.y === -dy) return true;
-  return false;
+/** 斜めの姿勢で90°回るとき、途中のマスの辺ぞい（向き fx, fy）を通れるか */
+function canPassEdge(level, s, x, y, fx, fy) {
+  const t = effTile(level, s, x, y);
+  if (!t) return false;
+  if (t.passEdge) return t.passEdge(fx, fy);
+  return t.passable === true;
 }
 
 function cloneState(s) {
@@ -555,6 +572,7 @@ function applyMove(level, s, mv) {
  * 1手で可能な移動をすべて列挙する。
  * 戻り値: [{ pivot, mover, to, dir(+1 時計回り / -1 反時計回り), angle(π/2 か π/4), kind, next }]
  *   kind: 'turn90' 通常の90°回転 / 'stop45' 45°止めマスで止まる / 'turn45' 斜めの姿勢から45°戻る
+ *         / 'turnDiag' 斜めの姿勢のまま90°回る
  */
 function getMoves(level, s) {
   const result = [];
@@ -580,22 +598,33 @@ function getMoves(level, s) {
         const pass = { x: m.x + nx, y: m.y + ny };
         // 90°回転
         if (canStand(level, s, to.x, to.y)
-            && (!CONFIG.CHECK_DIAGONAL_PASS || canPass(level, s, pass.x, pass.y, pass.x - p.x, pass.y - p.y))
-            && !edgeBlocked(level, s, m, pass) && !edgeBlocked(level, s, pass, to)) {
+            && (!CONFIG.CHECK_DIAGONAL_PASS || canPass(level, s, pass.x, pass.y, pass.x - p.x, pass.y - p.y))) {
           push({ pivot, mover, to, dir, angle: Math.PI / 2, kind: 'turn90' });
         }
         // 45°止め
         const pt = effTile(level, s, pass.x, pass.y);
-        if (pt && pt.stop45 && pt.standable && !edgeBlocked(level, s, m, pass)) {
+        if (pt && pt.stop45 && pt.standable) {
           push({ pivot, mover, to: pass, dir, angle: Math.PI / 4, kind: 'stop45' });
         }
       }
     } else if (Math.abs(vx) === 1 && Math.abs(vy) === 1) {
       // 斜めの姿勢: 45°回して縦か横に戻る
       for (const to of [{ x: p.x + vx, y: p.y }, { x: p.x, y: p.y + vy }]) {
-        if (!canStand(level, s, to.x, to.y) || edgeBlocked(level, s, m, to)) continue;
+        if (!canStand(level, s, to.x, to.y)) continue;
         const cross = vx * (to.y - p.y) - vy * (to.x - p.x);
         push({ pivot, mover, to, dir: cross > 0 ? 1 : -1, angle: Math.PI / 4, kind: 'turn45' });
+      }
+      // 斜めの姿勢のまま90°回って、別の斜めの位置へ
+      for (const dir of [1, -1]) {
+        const nx = dir === 1 ? -vy : vy, ny = dir === 1 ? vx : -vx;
+        const to = { x: p.x + nx, y: p.y + ny };
+        // 途中で通るのは、軸の上下左右のうち元の位置と行き先にはさまれたマス。足はその遠い側の辺ぞいを通る
+        const mid = { x: p.x + (vx + nx) / 2, y: p.y + (vy + ny) / 2 };
+        const fx = mid.x - p.x, fy = mid.y - p.y;
+        if (canStand(level, s, to.x, to.y)
+            && (!CONFIG.CHECK_DIAGONAL_PASS || canPassEdge(level, s, mid.x, mid.y, fx, fy))) {
+          push({ pivot, mover, to, dir, angle: Math.PI / 2, kind: 'turnDiag' });
+        }
       }
     }
   }
@@ -728,7 +757,6 @@ const COLORS = {
   goal: '#ffd166',
   footA: '#ef476f',
   footB: '#3a86ff',
-  bump: '#f4a340',
   stop: '#2ec4b6',
   switchCol: '#b388ff',
   paint: '#8bd17c',
@@ -809,21 +837,23 @@ function drawTileKey(g, key, px, py, c, opt = {}) {
       g.stroke();
       break;
     }
-    case 'bump': {
-      // 辺の上に乗った小さな三角形（底辺 = その辺、高さ 0.38 マス）
-      const { x: ex, y: ey } = tile.bump;
-      const hgt = c * 0.38, ins = c * 0.06;
+    case 'peak': {
+      // 山形の三角形（底辺 = マスの1辺、頂点 = マスの中心）
+      const { x: ex, y: ey } = tile.base;
       const mx = px + c / 2, my = py + c / 2;
-      const ox = ex * (c / 2), oy = ey * (c / 2);
-      const bx = mx + ox, by = my + oy;                 // 辺の中点
-      const tx = -ey, ty = ex;                          // 辺に沿う向き
-      g.fillStyle = COLORS.bump;
+      const tx = -ey, ty = ex;                          // 底辺に沿う向き
+      const bx = mx + ex * c / 2, by = my + ey * c / 2; // 底辺の中点
+      const p1 = [bx + tx * c / 2, by + ty * c / 2], p2 = [bx - tx * c / 2, by - ty * c / 2];
+      g.fillStyle = COLORS.block;
       g.beginPath();
-      g.moveTo(bx + tx * (c / 2 - ins) - ex * 1, by + ty * (c / 2 - ins) - ey * 1);
-      g.lineTo(bx - tx * (c / 2 - ins) - ex * 1, by - ty * (c / 2 - ins) - ey * 1);
-      g.lineTo(bx - ex * hgt, by - ey * hgt);
+      g.moveTo(p1[0], p1[1]); g.lineTo(p2[0], p2[1]); g.lineTo(mx, my);
       g.closePath();
       g.fill();
+      g.strokeStyle = COLORS.slopeEdge;
+      g.lineWidth = Math.max(1.5, c * 0.04);
+      g.beginPath();
+      g.moveTo(p1[0], p1[1]); g.lineTo(mx, my); g.lineTo(p2[0], p2[1]);
+      g.stroke();
       break;
     }
     case 'goal': case 'goalA': case 'goalB': {
@@ -1224,7 +1254,7 @@ window.addEventListener('resize', () => { resize(); editor.resize(); });
 const PALETTE = [
   'wall', 'floor', 'footA', 'footB', 'goal', 'goalA', 'goalB',
   'triTL', 'triTR', 'triBL', 'triBR', 'stop', 'crumble', 'paint',
-  'bumpS', 'bumpN', 'bumpW', 'bumpE', 'switch', 'doorClosed', 'doorOpen',
+  'peakU', 'peakD', 'peakR', 'peakL', 'switch', 'doorClosed', 'doorOpen',
 ];
 
 const editor = {
