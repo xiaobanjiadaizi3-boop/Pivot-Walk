@@ -32,7 +32,11 @@
   }
   .view.active { display: flex; }
   header { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 0 8px; }
-  #stageLabel { font-size: 18px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #stageSelect {
+    font: inherit; font-size: 17px; font-weight: 700; color: var(--text); background: var(--btn);
+    border: none; border-radius: 8px; padding: 8px 10px;
+  }
+  #stageLabel { flex: 1; font-size: 16px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #info { font-size: 14px; color: var(--muted); white-space: nowrap; }
   #info b { color: var(--text); font-size: 20px; }
   .boardWrap { position: relative; width: 100%; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
@@ -51,7 +55,8 @@
     background: #0d0f14; border: 1px solid #3a3f50; border-radius: 10px; padding: 8px; z-index: 5;
   }
   #chooser.show { display: flex; }
-  #chooser button { padding: 10px 14px; font-size: 14px; white-space: nowrap; }
+  #chooser { flex-direction: row; }
+  #chooser button.footBtn { width: 44px; height: 44px; border-radius: 50%; padding: 0; }
   .controls { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding-top: 10px; }
   button {
     font: inherit; font-size: 15px; color: var(--text);
@@ -113,8 +118,9 @@
 <!-- ====================== プレイ画面 ====================== -->
 <div id="playView" class="view active">
   <header>
-    <div id="stageLabel">STAGE 1</div>
-    <div id="info"><b id="moveCount">0</b> 手 <span id="parLabel"></span></div>
+    <select id="stageSelect" aria-label="ステージ"></select>
+    <div id="stageLabel"></div>
+    <div id="info"><b id="moveCount">0</b> 手</div>
   </header>
   <div class="boardWrap" id="boardWrap">
     <canvas id="board"></canvas>
@@ -122,7 +128,6 @@
     <div id="overlay">
       <h2>CLEAR!</h2>
       <p id="clearMoves"></p>
-      <p class="sub" id="clearPar"></p>
       <button id="btnNextOverlay" class="primary">次のステージへ</button>
     </div>
   </div>
@@ -135,7 +140,6 @@
   <div class="controls" style="grid-template-columns: 1fr; padding-top: 6px;">
     <button id="btnToEditor" class="small">ステージエディタ</button>
   </div>
-  <div class="legend" id="legend">光っているマスをタップすると片足を軸に回転します</div>
 </div>
 
 <!-- ====================== エディタ画面 ====================== -->
@@ -211,7 +215,7 @@ const CONFIG = {
  *   passEdge  : 斜めの姿勢のまま90°回るとき、足がマスの「辺ぞい」をかすめて通れるか。
  *               関数 (fx, fy) => boolean。(fx, fy) はかすめる辺の向き（軸から遠い側）。
  *               省略時は passable が true なら通れる
- *   stop45    : 回転の途中（45°）で止まれるマス
+ *   item      : 45°アイテム。取ると消える。縦横の姿勢と斜めの姿勢を切り替えるときに必要
  *   onEnter / onLeave : 足が乗った／離れたときの効果。
  *               (s, level, idx) を受け取り、状態 s（コピー済み）を書き換える
  *   draw      : 描画方法のキー
@@ -225,7 +229,8 @@ function triangleTile(char, sx, sy, label) {
     char, label, standable: false, goalFor: [], draw: 'triangle', solid: { x: sx, y: sy },
     passable: (dx, dy) => dx === sx && dy === sy,
     // 埋まった直角三角形の2辺（(sx,0) と (0,sy) の辺）ぞいは通れない
-    passEdge: (fx, fy) => !((fx === sx && fy === 0) || (fy === sy && fx === 0)),
+    // 斜めの姿勢のまま回るときは、どの向きでも斜めの面か直角の角にぶつかるので通れない
+    passEdge: () => false,
   };
 }
 /** 山形の三角形。底辺がマスの1辺 (ex, ey) にあり、頂点がマスの中心。足は乗れない。
@@ -254,7 +259,11 @@ const TILE_TYPES = {
   peakD: peakTile('v',  0, -1, '山 ▼'),
   peakR: peakTile('>', -1,  0, '山 ▶'),
   peakL: peakTile('<',  1,  0, '山 ◀'),
-  stop:  { char: 'O', label: '45°止め', standable: true, passable: true, goalFor: [], draw: 'stop', stop45: true },
+  // 45°アイテム: 足が45°回ってこのマスに入ると取れる（消える）。取るたびに縦横⇔斜めの姿勢が切り替わる
+  stop:  {
+    char: 'O', label: '45°アイテム', standable: true, passable: true, goalFor: [], draw: 'item', item: true,
+    onEnter(s, level, idx) { s.items = setBit(s.items, level.itemBit.get(idx)); },
+  },
   crumble: {
     char: 'C', label: '崩れる床', standable: true, passable: true, goalFor: [], draw: 'crumble',
     onLeave(s, level, idx) { s.broken = setBit(s.broken, level.crumbleBit.get(idx)); },
@@ -289,7 +298,8 @@ function setBit(str, i) { return str.slice(0, i) + '1' + str.slice(i + 1); }
  *     r: ◤ 左上   7: ◥ 右上   L: ◣ 左下   J: ◢ 右下
  *   山形の三角形（足は乗れない。頂点側の2つの角のどちらからでもかすめて通れる）
  *     ^: ▲   v: ▼   >: ▶   <: ◀
- *   O: 45°止め（回転の途中で斜めに止まれる。斜めのまま90°回ることもできる）
+ *   O: 45°アイテム（45°回ってこのマスに入ると取れて斜めの姿勢になる。斜めの間は斜めのまま90°ずつ回る。
+ *      縦横に戻るには、もう一度アイテムを取る必要がある）
  *   C: 崩れる床（足が離れると穴になる。穴の上は回転で通過はできる）
  *   S: スイッチ（足が乗るたびに扉が開閉）  D: 扉（最初は閉）  d: 扉（最初は開）
  *   P: 塗りマス（すべてのPを踏むとクリア条件を満たす。G/R/U と組み合わせると両方必要）
@@ -419,13 +429,13 @@ const STAGES = [
     '#G...#',
     '######',
   ]},
-  { name: '45°で止まる', map: [
+  { name: '45°アイテム', map: [
     '######',
-    '#.RJO#',
-    '#.r.O#',
-    '#...##',
-    '#....#',
-    '##.AB#',
+    '#...O#',
+    '#.O..#',
+    '#..#.#',
+    '#..AB#',
+    '#..R.#',
     '######',
   ]},
   { name: '崩れる床', map: [
@@ -463,6 +473,15 @@ const STAGES = [
     '#...S.#',
     '#######',
   ]},
+  { name: 'アイテムと山', map: [
+    '#######',
+    '#.....#',
+    '#..ABO#',
+    '#..v#O#',
+    '#^O..G#',
+    '#O...G#',
+    '#######',
+  ]},
 ];
 
 /* =========================================================
@@ -475,7 +494,7 @@ function parseStage(stage) {
   const w = Math.max(...rows.map(r => r.length));
   const tiles = [];
   let a = null, b = null;
-  const crumbleBit = new Map(), paintBit = new Map();
+  const crumbleBit = new Map(), paintBit = new Map(), itemBit = new Map();
   for (let y = 0; y < h; y++) {
     const line = [];
     for (let x = 0; x < w; x++) {
@@ -487,6 +506,7 @@ function parseStage(stage) {
       if (ch === 'B') { if (b) throw new Error('B が2つあります'); b = { x, y }; }
       if (tile === 'crumble') crumbleBit.set(y * w + x, crumbleBit.size);
       if (tile === 'paint') paintBit.set(y * w + x, paintBit.size);
+      if (tile === 'stop') itemBit.set(y * w + x, itemBit.size);
     }
     tiles.push(line);
   }
@@ -500,9 +520,9 @@ function parseStage(stage) {
   }
   const hasFootGoal = goals.A.own || goals.A.shared || goals.B.own || goals.B.shared;
   if (!hasFootGoal && paintBit.size === 0) throw new Error('ゴール（G / R / U / P）がありません');
-  const level = { w, h, tiles, start: null, goals, hasFootGoal, crumbleBit, paintBit };
+  const level = { w, h, tiles, start: null, goals, hasFootGoal, crumbleBit, paintBit, itemBit };
   // 初期状態（最初に乗っているマスの効果も反映する）
-  let s0 = { a, b, door: 0, broken: '0'.repeat(crumbleBit.size), painted: '0'.repeat(paintBit.size) };
+  let s0 = { a, b, door: 0, broken: '0'.repeat(crumbleBit.size), painted: '0'.repeat(paintBit.size), items: '0'.repeat(itemBit.size) };
   for (const p of [a, b]) {
     const idx = p.y * w + p.x;
     if (paintBit.has(idx)) s0.painted = setBit(s0.painted, paintBit.get(idx));
@@ -524,6 +544,7 @@ function baseKey(level, x, y) {
 function effKey(level, s, x, y) {
   const k = baseKey(level, x, y);
   if (k === 'crumble' && s.broken[level.crumbleBit.get(y * level.w + x)] === '1') return 'hole';
+  if (k === 'stop' && s.items[level.itemBit.get(y * level.w + x)] === '1') return 'floor';
   if (k === 'doorClosed' || k === 'doorOpen') {
     const open = (k === 'doorOpen') !== (s.door === 1);
     return open ? 'doorOpen' : 'doorClosed';
@@ -537,6 +558,8 @@ function canPass(level, s, x, y, dx, dy) {
   if (!t) return false;
   return typeof t.passable === 'function' ? t.passable(dx, dy) : t.passable;
 }
+/** まだ取られていない45°アイテムがあるか */
+function isItem(level, s, x, y) { const t = effTile(level, s, x, y); return !!t && !!t.item; }
 /** 斜めの姿勢で90°回るとき、途中のマスの辺ぞい（向き fx, fy）を通れるか */
 function canPassEdge(level, s, x, y, fx, fy) {
   const t = effTile(level, s, x, y);
@@ -546,10 +569,10 @@ function canPassEdge(level, s, x, y, fx, fy) {
 }
 
 function cloneState(s) {
-  return { a: { ...s.a }, b: { ...s.b }, door: s.door, broken: s.broken, painted: s.painted };
+  return { a: { ...s.a }, b: { ...s.b }, door: s.door, broken: s.broken, painted: s.painted, items: s.items };
 }
 function stateKey(s) {
-  return `${s.a.x},${s.a.y}|${s.b.x},${s.b.y}|${s.door}|${s.broken}|${s.painted}`;
+  return `${s.a.x},${s.a.y}|${s.b.x},${s.b.y}|${s.door}|${s.broken}|${s.painted}|${s.items}`;
 }
 
 /** 動かした結果の状態を返す（マスの効果を反映）。成立しなければ null */
@@ -571,8 +594,9 @@ function applyMove(level, s, mv) {
 /**
  * 1手で可能な移動をすべて列挙する。
  * 戻り値: [{ pivot, mover, to, dir(+1 時計回り / -1 反時計回り), angle(π/2 か π/4), kind, next }]
- *   kind: 'turn90' 通常の90°回転 / 'stop45' 45°止めマスで止まる / 'turn45' 斜めの姿勢から45°戻る
- *         / 'turnDiag' 斜めの姿勢のまま90°回る
+ *   kind: 'turn90' 通常の90°回転 / 'stop45' 45°回ってアイテムを取り斜めになる
+ *         / 'turn45' 斜めの姿勢から45°回ってアイテムを取り縦横に戻る / 'turnDiag' 斜めの姿勢のまま90°回る
+ * アイテムのマスには45°回って入るときだけ入れる（90°回転では入れない）。
  */
 function getMoves(level, s) {
   const result = [];
@@ -597,20 +621,19 @@ function getMoves(level, s) {
         const to = { x: p.x + nx, y: p.y + ny };
         const pass = { x: m.x + nx, y: m.y + ny };
         // 90°回転
-        if (canStand(level, s, to.x, to.y)
+        if (canStand(level, s, to.x, to.y) && !isItem(level, s, to.x, to.y)
             && (!CONFIG.CHECK_DIAGONAL_PASS || canPass(level, s, pass.x, pass.y, pass.x - p.x, pass.y - p.y))) {
           push({ pivot, mover, to, dir, angle: Math.PI / 2, kind: 'turn90' });
         }
-        // 45°止め
-        const pt = effTile(level, s, pass.x, pass.y);
-        if (pt && pt.stop45 && pt.standable) {
+        // 45°回ってアイテムを取る → 斜めの姿勢になる
+        if (isItem(level, s, pass.x, pass.y)) {
           push({ pivot, mover, to: pass, dir, angle: Math.PI / 4, kind: 'stop45' });
         }
       }
     } else if (Math.abs(vx) === 1 && Math.abs(vy) === 1) {
-      // 斜めの姿勢: 45°回して縦か横に戻る
+      // 斜めの姿勢: 45°回ってアイテムを取ると縦か横に戻る
       for (const to of [{ x: p.x + vx, y: p.y }, { x: p.x, y: p.y + vy }]) {
-        if (!canStand(level, s, to.x, to.y)) continue;
+        if (!isItem(level, s, to.x, to.y)) continue;
         const cross = vx * (to.y - p.y) - vy * (to.x - p.x);
         push({ pivot, mover, to, dir: cross > 0 ? 1 : -1, angle: Math.PI / 4, kind: 'turn45' });
       }
@@ -621,7 +644,7 @@ function getMoves(level, s) {
         // 途中で通るのは、軸の上下左右のうち元の位置と行き先にはさまれたマス。足はその遠い側の辺ぞいを通る
         const mid = { x: p.x + (vx + nx) / 2, y: p.y + (vy + ny) / 2 };
         const fx = mid.x - p.x, fy = mid.y - p.y;
-        if (canStand(level, s, to.x, to.y)
+        if (canStand(level, s, to.x, to.y) && !isItem(level, s, to.x, to.y)
             && (!CONFIG.CHECK_DIAGONAL_PASS || canPassEdge(level, s, mid.x, mid.y, fx, fy))) {
           push({ pivot, mover, to, dir, angle: Math.PI / 2, kind: 'turnDiag' });
         }
@@ -871,14 +894,17 @@ function drawTileKey(g, key, px, py, c, opt = {}) {
       g.restore();
       break;
     }
-    case 'stop': {
-      g.strokeStyle = COLORS.stop;
-      g.lineWidth = Math.max(2, c * 0.06);
-      const r = c * 0.3;
+    case 'item': {
+      // 宝石のようなひし形
+      const r = c * 0.24, cx = px + c / 2, cy = py + c / 2;
+      g.fillStyle = COLORS.stop;
       g.beginPath();
-      g.moveTo(px + c / 2, py + c / 2 - r); g.lineTo(px + c / 2 + r, py + c / 2);
-      g.lineTo(px + c / 2, py + c / 2 + r); g.lineTo(px + c / 2 - r, py + c / 2);
-      g.closePath(); g.stroke();
+      g.moveTo(cx, cy - r); g.lineTo(cx + r, cy); g.lineTo(cx, cy + r); g.lineTo(cx - r, cy);
+      g.closePath(); g.fill();
+      g.fillStyle = 'rgba(255,255,255,0.45)';
+      g.beginPath();
+      g.moveTo(cx, cy - r); g.lineTo(cx + r * 0.45, cy - r * 0.15); g.lineTo(cx - r * 0.45, cy - r * 0.15);
+      g.closePath(); g.fill();
       break;
     }
     case 'crumble': {
@@ -926,7 +952,7 @@ function drawTileKey(g, key, px, py, c, opt = {}) {
   }
 }
 
-function drawFoot(g, x, y, c, color, label, alpha = 1) {
+function drawFoot(g, x, y, c, color, alpha = 1) {
   const r = c * 0.33;
   g.save();
   g.globalAlpha = alpha;
@@ -936,14 +962,6 @@ function drawFoot(g, x, y, c, color, label, alpha = 1) {
   g.beginPath();
   g.arc(x, y, r, 0, Math.PI * 2);
   g.fill();
-  g.restore();
-  g.save();
-  g.globalAlpha = alpha;
-  g.fillStyle = 'rgba(255,255,255,0.92)';
-  g.font = `700 ${Math.round(c * 0.3)}px sans-serif`;
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.fillText(label, x, y + 1);
   g.restore();
 }
 
@@ -1008,25 +1026,24 @@ function startLevel(stage) {
   updateHud();
 }
 
-function currentPar() {
-  if (game.testing) return game.testing.par;
-  const st = game.stages[game.stageIndex];
-  if (!st) return null;
-  if (!st.custom) return game.par[game.stageIndex];
-  return null;
-}
-
 function updateHud() {
-  let label;
-  if (game.testing) label = 'テストプレイ' + (game.testing.stage.name ? `  ${game.testing.stage.name}` : '');
-  else {
-    const st = game.stages[game.stageIndex];
-    label = `${st.custom ? '★' : 'STAGE '}${game.stageIndex + 1}` + (st.name ? `  ${st.name}` : '');
+  // ステージ名や最短手数はヒントになるので表示しない
+  const sel = el('stageSelect');
+  sel.style.display = game.testing ? 'none' : '';
+  el('stageLabel').textContent = game.testing ? 'テストプレイ' : '';
+  if (!game.testing) {
+    if (sel.options.length !== game.stages.length) {
+      sel.innerHTML = '';
+      game.stages.forEach((st, i) => {
+        const o = document.createElement('option');
+        o.value = i;
+        o.textContent = `${st.custom ? '★' : 'STAGE '}${i + 1}`;
+        sel.appendChild(o);
+      });
+    }
+    sel.value = game.stageIndex;
   }
-  el('stageLabel').textContent = label;
   el('moveCount').textContent = game.moves;
-  const par = currentPar();
-  el('parLabel').textContent = par && par.moves >= 0 ? `/ 最短 ${par.moves}` : '';
   el('btnUndo').disabled = game.history.length === 0 || game.cleared;
   el('btnReset').disabled = game.history.length === 0 && !game.cleared;
   el('btnPrev').textContent = game.testing ? 'エディタへ' : '◀ 前';
@@ -1050,13 +1067,8 @@ function onAnimEnd() {
   game.anim = null;
   if (isGoal(game.level, game.state)) {
     game.cleared = true;
-    const par = currentPar();
-    el('clearMoves').textContent = `${game.moves} 手でクリア`;
-    el('clearPar').textContent = par && par.moves >= 0
-      ? (game.moves <= par.moves ? '最短手数です！' : `最短は ${par.moves} 手`)
-      : '';
-    el('btnNextOverlay').textContent = game.testing ? 'エディタへ戻る'
-      : game.stageIndex === game.stages.length - 1 ? '最初のステージへ' : '次のステージへ';
+    el('clearMoves').textContent = `${game.moves} 手`;
+    el('btnNextOverlay').textContent = game.testing ? 'エディタへ戻る' : '次へ';
     overlay.classList.add('show');
     updateHud();
   }
@@ -1138,7 +1150,7 @@ function draw(now) {
     animating = t < 1;
   }
 
-  // 移動候補のハイライト（リングの色 = 動く足、ひし形 = 45°で止まる手）
+  // 移動候補のハイライト（リングの色 = 動く足）
   if (!game.anim && !game.cleared) {
     for (const [, group] of groupMovesByCell(getMoves(level, s))) {
       const to = group[0].to;
@@ -1151,12 +1163,7 @@ function draw(now) {
         g.lineWidth = 2;
         const r = c * (0.14 + i * 0.08);
         g.beginPath();
-        if (mv.kind === 'stop45') {
-          g.moveTo(cc.x, cc.y - r * 1.2); g.lineTo(cc.x + r * 1.2, cc.y);
-          g.lineTo(cc.x, cc.y + r * 1.2); g.lineTo(cc.x - r * 1.2, cc.y); g.closePath();
-        } else {
-          g.arc(cc.x, cc.y, r, 0, Math.PI * 2);
-        }
+        g.arc(cc.x, cc.y, r, 0, Math.PI * 2);
         g.stroke();
       });
     }
@@ -1171,8 +1178,8 @@ function draw(now) {
   g.lineTo(posB.x, posB.y);
   g.stroke();
 
-  drawFoot(g, posA.x, posA.y, c, COLORS.footA, 'A');
-  drawFoot(g, posB.x, posB.y, c, COLORS.footB, 'B');
+  drawFoot(g, posA.x, posA.y, c, COLORS.footA);
+  drawFoot(g, posB.x, posB.y, c, COLORS.footB);
   return animating;
 }
 
@@ -1188,8 +1195,7 @@ function showChooser(group, x, y) {
   chooser.innerHTML = '';
   for (const mv of group) {
     const b = document.createElement('button');
-    const foot = mv.mover === 'a' ? 'A' : 'B';
-    b.textContent = `${foot} を${mv.kind === 'stop45' ? '45°で止める' : '回す'}`;
+    b.className = 'footBtn';
     b.style.background = mv.mover === 'a' ? COLORS.footA : COLORS.footB;
     b.addEventListener('click', e => { e.stopPropagation(); tryMove(mv); });
     chooser.appendChild(b);
@@ -1233,6 +1239,7 @@ el('btnReset').addEventListener('click', () => {
 });
 el('btnPrev').addEventListener('click', () => { if (game.testing) showEditor(); else loadStage(game.stageIndex - 1); });
 el('btnNext').addEventListener('click', () => loadStage(game.stageIndex + 1));
+el('stageSelect').addEventListener('change', e => { loadStage(+e.target.value); e.target.blur(); });
 el('btnNextOverlay').addEventListener('click', () => { if (game.testing) showEditor(); else loadStage(game.stageIndex + 1); });
 el('btnToEditor').addEventListener('click', () => {
   if (!game.testing) {
@@ -1388,8 +1395,8 @@ const editor = {
       g.strokeStyle = COLORS.leg; g.lineWidth = c * 0.14; g.lineCap = 'round';
       g.beginPath(); g.moveTo((this.a.x + 0.5) * c, (this.a.y + 0.5) * c); g.lineTo((this.b.x + 0.5) * c, (this.b.y + 0.5) * c); g.stroke();
     }
-    if (this.a) drawFoot(g, (this.a.x + 0.5) * c, (this.a.y + 0.5) * c, c, COLORS.footA, 'A');
-    if (this.b) drawFoot(g, (this.b.x + 0.5) * c, (this.b.y + 0.5) * c, c, COLORS.footB, 'B');
+    if (this.a) drawFoot(g, (this.a.x + 0.5) * c, (this.a.y + 0.5) * c, c, COLORS.footA);
+    if (this.b) drawFoot(g, (this.b.x + 0.5) * c, (this.b.y + 0.5) * c, c, COLORS.footB);
   },
 
   status(msg, cls = '') {
@@ -1425,7 +1432,7 @@ function buildPalette() {
     let label;
     if (key === 'footA' || key === 'footB') {
       drawTileKey(g, 'floor', 0, 0, 30);
-      drawFoot(g, 15, 15, 30, key === 'footA' ? COLORS.footA : COLORS.footB, key === 'footA' ? 'A' : 'B');
+      drawFoot(g, 15, 15, 30, key === 'footA' ? COLORS.footA : COLORS.footB);
       label = key === 'footA' ? '足A' : '足B';
     } else {
       drawTileKey(g, key, 0, 0, 30, { wallMode: 'always' });
@@ -1528,10 +1535,10 @@ el('btnEdTest').addEventListener('click', () => {
   const res = editor.check();
   if (!res) return;
   const stage = editor.toStage();
-  game.testing = { stage, par: res.r };
+  game.testing = { stage };
   showPlay();
   startLevel(stage);
-  game.testing = { stage, par: res.r }; // startLevel 後も保持
+  game.testing = { stage }; // startLevel 後も保持
   updateHud();
 });
 el('btnEdSave').addEventListener('click', () => {
