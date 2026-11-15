@@ -32,7 +32,11 @@
   }
   .view.active { display: flex; }
   header { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 0 8px; }
-  #stageLabel { font-size: 18px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #stageSelect {
+    font: inherit; font-size: 17px; font-weight: 700; color: var(--text); background: var(--btn);
+    border: none; border-radius: 8px; padding: 8px 10px;
+  }
+  #stageLabel { flex: 1; font-size: 16px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #info { font-size: 14px; color: var(--muted); white-space: nowrap; }
   #info b { color: var(--text); font-size: 20px; }
   .boardWrap { position: relative; width: 100%; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
@@ -51,7 +55,8 @@
     background: #0d0f14; border: 1px solid #3a3f50; border-radius: 10px; padding: 8px; z-index: 5;
   }
   #chooser.show { display: flex; }
-  #chooser button { padding: 10px 14px; font-size: 14px; white-space: nowrap; }
+  #chooser { flex-direction: row; }
+  #chooser button.footBtn { width: 44px; height: 44px; border-radius: 50%; padding: 0; }
   .controls { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding-top: 10px; }
   button {
     font: inherit; font-size: 15px; color: var(--text);
@@ -65,47 +70,6 @@
   #overlay button { padding: 12px 28px; margin-top: 6px; }
   .legend { width: 100%; font-size: 12px; color: var(--muted); text-align: center; padding-top: 6px; }
 
-  /* ---------- エディタ ---------- */
-  .edRow { width: 100%; display: flex; gap: 6px; align-items: center; padding-bottom: 6px; flex-wrap: wrap; }
-  .edRow input, .edRow select {
-    font: inherit; font-size: 14px; color: var(--text); background: var(--btn);
-    border: none; border-radius: 8px; padding: 8px; min-width: 0;
-  }
-  .edRow input { flex: 1; }
-  .edRow select { flex: 1; }
-  .sizeCtl { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
-  .sizeCtl b { color: var(--text); min-width: 18px; text-align: center; }
-  #palette {
-    width: 100%; display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;
-    padding: 6px 0; max-height: 30vh; overflow-y: auto;
-  }
-  .tool {
-    display: flex; flex-direction: column; align-items: center; gap: 2px;
-    background: var(--btn); border-radius: 8px; padding: 4px 2px; border: 2px solid transparent;
-    font-size: 10px; color: var(--muted); line-height: 1.1; text-align: center;
-  }
-  .tool.sel { border-color: var(--sel); color: var(--text); }
-  .tool canvas { width: 30px; height: 30px; }
-  .edActions { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-  .edActions button { padding: 10px 2px; font-size: 13px; }
-  #edStatus { width: 100%; font-size: 13px; color: var(--muted); min-height: 1.4em; padding: 4px 0; text-align: center; }
-  #edStatus.ok { color: #8bd17c; }
-  #edStatus.ng { color: #ff7b8a; }
-  #modal {
-    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-    background: rgba(0,0,0,0.6); z-index: 20; padding: 16px;
-  }
-  #modal.show { display: flex; }
-  #modal .box { background: var(--panel); border-radius: 12px; padding: 14px; width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 10px; }
-  #modal h3 { margin: 0; font-size: 16px; }
-  #modal p { margin: 0; font-size: 12px; color: var(--muted); }
-  #modal textarea {
-    width: 100%; height: 42vh; font-family: ui-monospace, Menlo, monospace; font-size: 13px;
-    background: #0d0f14; color: var(--text); border: 1px solid #3a3f50; border-radius: 8px; padding: 8px;
-    -webkit-user-select: text; user-select: text;
-  }
-  #modal .btns { display: flex; gap: 8px; justify-content: flex-end; }
-  #modal .btns button { padding: 10px 16px; }
 </style>
 </head>
 <body>
@@ -113,8 +77,9 @@
 <!-- ====================== プレイ画面 ====================== -->
 <div id="playView" class="view active">
   <header>
-    <div id="stageLabel">STAGE 1</div>
-    <div id="info"><b id="moveCount">0</b> 手 <span id="parLabel"></span></div>
+    <select id="stageSelect" aria-label="ステージ"></select>
+    <div id="stageLabel"></div>
+    <div id="info"><b id="moveCount">0</b> 手</div>
   </header>
   <div class="boardWrap" id="boardWrap">
     <canvas id="board"></canvas>
@@ -122,7 +87,6 @@
     <div id="overlay">
       <h2>CLEAR!</h2>
       <p id="clearMoves"></p>
-      <p class="sub" id="clearPar"></p>
       <button id="btnNextOverlay" class="primary">次のステージへ</button>
     </div>
   </div>
@@ -131,54 +95,6 @@
     <button id="btnUndo">戻す</button>
     <button id="btnReset">リセット</button>
     <button id="btnNext">次 ▶</button>
-  </div>
-  <div class="controls" style="grid-template-columns: 1fr; padding-top: 6px;">
-    <button id="btnToEditor" class="small">ステージエディタ</button>
-  </div>
-  <div class="legend" id="legend">光っているマスをタップすると片足を軸に回転します</div>
-</div>
-
-<!-- ====================== エディタ画面 ====================== -->
-<div id="editView" class="view">
-  <header>
-    <div style="font-size:18px;font-weight:700;">ステージエディタ</div>
-    <button id="btnEdToPlay" class="small">プレイに戻る</button>
-  </header>
-  <div class="edRow">
-    <select id="edOpen"></select>
-    <button id="btnEdNew" class="small">新規</button>
-  </div>
-  <div class="edRow">
-    <input id="edName" placeholder="ステージ名" maxlength="20">
-    <div class="sizeCtl">幅<button class="small" data-size="w-">−</button><b id="edW">7</b><button class="small" data-size="w+">＋</button></div>
-    <div class="sizeCtl">高<button class="small" data-size="h-">−</button><b id="edH">9</b><button class="small" data-size="h+">＋</button></div>
-  </div>
-  <div class="boardWrap" id="edWrap">
-    <canvas id="edCanvas"></canvas>
-  </div>
-  <div id="palette"></div>
-  <div id="edStatus">マスをタップ（なぞる）して配置します</div>
-  <div class="edActions">
-    <button id="btnEdTest" class="primary">テスト</button>
-    <button id="btnEdCheck">検証</button>
-    <button id="btnEdSave">保存</button>
-    <button id="btnEdDelete">削除</button>
-    <button id="btnEdExport">書き出し</button>
-    <button id="btnEdImport">読み込み</button>
-    <button id="btnEdUndo">取り消し</button>
-    <button id="btnEdClear">全消去</button>
-  </div>
-</div>
-
-<div id="modal">
-  <div class="box">
-    <h3 id="modalTitle"></h3>
-    <p id="modalNote"></p>
-    <textarea id="modalText" spellcheck="false"></textarea>
-    <div class="btns">
-      <button id="modalCancel">閉じる</button>
-      <button id="modalOk" class="primary">OK</button>
-    </div>
   </div>
 </div>
 
@@ -195,8 +111,6 @@ const CONFIG = {
   ANIM_MS: 180,
   // ソルバーが調べる状態数の上限（崩れる床や塗りマスが多いと状態が増える）
   SOLVER_MAX_STATES: 400000,
-  // 自作ステージの保存先（ブラウザの localStorage）
-  STORAGE_KEY: 'pivotwalk.customStages.v1',
 };
 
 /* =========================================================
@@ -211,7 +125,7 @@ const CONFIG = {
  *   passEdge  : 斜めの姿勢のまま90°回るとき、足がマスの「辺ぞい」をかすめて通れるか。
  *               関数 (fx, fy) => boolean。(fx, fy) はかすめる辺の向き（軸から遠い側）。
  *               省略時は passable が true なら通れる
- *   stop45    : 回転の途中（45°）で止まれるマス
+ *   item      : 45°アイテム。取ると消える。縦横の姿勢と斜めの姿勢を切り替えるときに必要
  *   onEnter / onLeave : 足が乗った／離れたときの効果。
  *               (s, level, idx) を受け取り、状態 s（コピー済み）を書き換える
  *   draw      : 描画方法のキー
@@ -225,7 +139,8 @@ function triangleTile(char, sx, sy, label) {
     char, label, standable: false, goalFor: [], draw: 'triangle', solid: { x: sx, y: sy },
     passable: (dx, dy) => dx === sx && dy === sy,
     // 埋まった直角三角形の2辺（(sx,0) と (0,sy) の辺）ぞいは通れない
-    passEdge: (fx, fy) => !((fx === sx && fy === 0) || (fy === sy && fx === 0)),
+    // 斜めの姿勢のまま回るときは、どの向きでも斜めの面か直角の角にぶつかるので通れない
+    passEdge: () => false,
   };
 }
 /** 山形の三角形。底辺がマスの1辺 (ex, ey) にあり、頂点がマスの中心。足は乗れない。
@@ -254,7 +169,11 @@ const TILE_TYPES = {
   peakD: peakTile('v',  0, -1, '山 ▼'),
   peakR: peakTile('>', -1,  0, '山 ▶'),
   peakL: peakTile('<',  1,  0, '山 ◀'),
-  stop:  { char: 'O', label: '45°止め', standable: true, passable: true, goalFor: [], draw: 'stop', stop45: true },
+  // 45°アイテム: 足が45°回ってこのマスに入ると取れる（消える）。取るたびに縦横⇔斜めの姿勢が切り替わる
+  stop:  {
+    char: 'O', label: '45°アイテム', standable: true, passable: true, goalFor: [], draw: 'item', item: true,
+    onEnter(s, level, idx) { s.items = setBit(s.items, level.itemBit.get(idx)); },
+  },
   crumble: {
     char: 'C', label: '崩れる床', standable: true, passable: true, goalFor: [], draw: 'crumble',
     onLeave(s, level, idx) { s.broken = setBit(s.broken, level.crumbleBit.get(idx)); },
@@ -289,7 +208,8 @@ function setBit(str, i) { return str.slice(0, i) + '1' + str.slice(i + 1); }
  *     r: ◤ 左上   7: ◥ 右上   L: ◣ 左下   J: ◢ 右下
  *   山形の三角形（足は乗れない。頂点側の2つの角のどちらからでもかすめて通れる）
  *     ^: ▲   v: ▼   >: ▶   <: ◀
- *   O: 45°止め（回転の途中で斜めに止まれる。斜めのまま90°回ることもできる）
+ *   O: 45°アイテム（45°回ってこのマスに入ると取れて斜めの姿勢になる。斜めの間は斜めのまま90°ずつ回る。
+ *      縦横に戻るには、もう一度アイテムを取る必要がある）
  *   C: 崩れる床（足が離れると穴になる。穴の上は回転で通過はできる）
  *   S: スイッチ（足が乗るたびに扉が開閉）  D: 扉（最初は閉）  d: 扉（最初は開）
  *   P: 塗りマス（すべてのPを踏むとクリア条件を満たす。G/R/U と組み合わせると両方必要）
@@ -419,13 +339,13 @@ const STAGES = [
     '#G...#',
     '######',
   ]},
-  { name: '45°で止まる', map: [
+  { name: '45°アイテム', map: [
     '######',
-    '#.RJO#',
-    '#.r.O#',
-    '#...##',
-    '#....#',
-    '##.AB#',
+    '#...O#',
+    '#.O..#',
+    '#..#.#',
+    '#..AB#',
+    '#..R.#',
     '######',
   ]},
   { name: '崩れる床', map: [
@@ -463,6 +383,15 @@ const STAGES = [
     '#...S.#',
     '#######',
   ]},
+  { name: 'アイテムと山', map: [
+    '#######',
+    '#.....#',
+    '#..ABO#',
+    '#..v#O#',
+    '#^O..G#',
+    '#O...G#',
+    '#######',
+  ]},
 ];
 
 /* =========================================================
@@ -475,7 +404,7 @@ function parseStage(stage) {
   const w = Math.max(...rows.map(r => r.length));
   const tiles = [];
   let a = null, b = null;
-  const crumbleBit = new Map(), paintBit = new Map();
+  const crumbleBit = new Map(), paintBit = new Map(), itemBit = new Map();
   for (let y = 0; y < h; y++) {
     const line = [];
     for (let x = 0; x < w; x++) {
@@ -487,6 +416,7 @@ function parseStage(stage) {
       if (ch === 'B') { if (b) throw new Error('B が2つあります'); b = { x, y }; }
       if (tile === 'crumble') crumbleBit.set(y * w + x, crumbleBit.size);
       if (tile === 'paint') paintBit.set(y * w + x, paintBit.size);
+      if (tile === 'stop') itemBit.set(y * w + x, itemBit.size);
     }
     tiles.push(line);
   }
@@ -500,9 +430,9 @@ function parseStage(stage) {
   }
   const hasFootGoal = goals.A.own || goals.A.shared || goals.B.own || goals.B.shared;
   if (!hasFootGoal && paintBit.size === 0) throw new Error('ゴール（G / R / U / P）がありません');
-  const level = { w, h, tiles, start: null, goals, hasFootGoal, crumbleBit, paintBit };
+  const level = { w, h, tiles, start: null, goals, hasFootGoal, crumbleBit, paintBit, itemBit };
   // 初期状態（最初に乗っているマスの効果も反映する）
-  let s0 = { a, b, door: 0, broken: '0'.repeat(crumbleBit.size), painted: '0'.repeat(paintBit.size) };
+  let s0 = { a, b, door: 0, broken: '0'.repeat(crumbleBit.size), painted: '0'.repeat(paintBit.size), items: '0'.repeat(itemBit.size) };
   for (const p of [a, b]) {
     const idx = p.y * w + p.x;
     if (paintBit.has(idx)) s0.painted = setBit(s0.painted, paintBit.get(idx));
@@ -524,6 +454,7 @@ function baseKey(level, x, y) {
 function effKey(level, s, x, y) {
   const k = baseKey(level, x, y);
   if (k === 'crumble' && s.broken[level.crumbleBit.get(y * level.w + x)] === '1') return 'hole';
+  if (k === 'stop' && s.items[level.itemBit.get(y * level.w + x)] === '1') return 'floor';
   if (k === 'doorClosed' || k === 'doorOpen') {
     const open = (k === 'doorOpen') !== (s.door === 1);
     return open ? 'doorOpen' : 'doorClosed';
@@ -537,6 +468,8 @@ function canPass(level, s, x, y, dx, dy) {
   if (!t) return false;
   return typeof t.passable === 'function' ? t.passable(dx, dy) : t.passable;
 }
+/** まだ取られていない45°アイテムがあるか */
+function isItem(level, s, x, y) { const t = effTile(level, s, x, y); return !!t && !!t.item; }
 /** 斜めの姿勢で90°回るとき、途中のマスの辺ぞい（向き fx, fy）を通れるか */
 function canPassEdge(level, s, x, y, fx, fy) {
   const t = effTile(level, s, x, y);
@@ -546,10 +479,10 @@ function canPassEdge(level, s, x, y, fx, fy) {
 }
 
 function cloneState(s) {
-  return { a: { ...s.a }, b: { ...s.b }, door: s.door, broken: s.broken, painted: s.painted };
+  return { a: { ...s.a }, b: { ...s.b }, door: s.door, broken: s.broken, painted: s.painted, items: s.items };
 }
 function stateKey(s) {
-  return `${s.a.x},${s.a.y}|${s.b.x},${s.b.y}|${s.door}|${s.broken}|${s.painted}`;
+  return `${s.a.x},${s.a.y}|${s.b.x},${s.b.y}|${s.door}|${s.broken}|${s.painted}|${s.items}`;
 }
 
 /** 動かした結果の状態を返す（マスの効果を反映）。成立しなければ null */
@@ -571,8 +504,9 @@ function applyMove(level, s, mv) {
 /**
  * 1手で可能な移動をすべて列挙する。
  * 戻り値: [{ pivot, mover, to, dir(+1 時計回り / -1 反時計回り), angle(π/2 か π/4), kind, next }]
- *   kind: 'turn90' 通常の90°回転 / 'stop45' 45°止めマスで止まる / 'turn45' 斜めの姿勢から45°戻る
- *         / 'turnDiag' 斜めの姿勢のまま90°回る
+ *   kind: 'turn90' 通常の90°回転 / 'stop45' 45°回ってアイテムを取り斜めになる
+ *         / 'turn45' 斜めの姿勢から45°回ってアイテムを取り縦横に戻る / 'turnDiag' 斜めの姿勢のまま90°回る
+ * アイテムのマスには45°回って入るときだけ入れる（90°回転では入れない）。
  */
 function getMoves(level, s) {
   const result = [];
@@ -597,20 +531,19 @@ function getMoves(level, s) {
         const to = { x: p.x + nx, y: p.y + ny };
         const pass = { x: m.x + nx, y: m.y + ny };
         // 90°回転
-        if (canStand(level, s, to.x, to.y)
+        if (canStand(level, s, to.x, to.y) && !isItem(level, s, to.x, to.y)
             && (!CONFIG.CHECK_DIAGONAL_PASS || canPass(level, s, pass.x, pass.y, pass.x - p.x, pass.y - p.y))) {
           push({ pivot, mover, to, dir, angle: Math.PI / 2, kind: 'turn90' });
         }
-        // 45°止め
-        const pt = effTile(level, s, pass.x, pass.y);
-        if (pt && pt.stop45 && pt.standable) {
+        // 45°回ってアイテムを取る → 斜めの姿勢になる
+        if (isItem(level, s, pass.x, pass.y)) {
           push({ pivot, mover, to: pass, dir, angle: Math.PI / 4, kind: 'stop45' });
         }
       }
     } else if (Math.abs(vx) === 1 && Math.abs(vy) === 1) {
-      // 斜めの姿勢: 45°回して縦か横に戻る
+      // 斜めの姿勢: 45°回ってアイテムを取ると縦か横に戻る
       for (const to of [{ x: p.x + vx, y: p.y }, { x: p.x, y: p.y + vy }]) {
-        if (!canStand(level, s, to.x, to.y)) continue;
+        if (!isItem(level, s, to.x, to.y)) continue;
         const cross = vx * (to.y - p.y) - vy * (to.x - p.x);
         push({ pivot, mover, to, dir: cross > 0 ? 1 : -1, angle: Math.PI / 4, kind: 'turn45' });
       }
@@ -621,7 +554,7 @@ function getMoves(level, s) {
         // 途中で通るのは、軸の上下左右のうち元の位置と行き先にはさまれたマス。足はその遠い側の辺ぞいを通る
         const mid = { x: p.x + (vx + nx) / 2, y: p.y + (vy + ny) / 2 };
         const fx = mid.x - p.x, fy = mid.y - p.y;
-        if (canStand(level, s, to.x, to.y)
+        if (canStand(level, s, to.x, to.y) && !isItem(level, s, to.x, to.y)
             && (!CONFIG.CHECK_DIAGONAL_PASS || canPassEdge(level, s, mid.x, mid.y, fx, fy))) {
           push({ pivot, mover, to, dir, angle: Math.PI / 2, kind: 'turnDiag' });
         }
@@ -727,23 +660,8 @@ function describeSolve(r) {
   return `最短${r.moves}手 / 最短ルート${routes}`;
 }
 
-/* =========================================================
- * 自作ステージの保存
- * ========================================================= */
-function loadCustomStages() {
-  try {
-    const raw = localStorage.getItem(CONFIG.STORAGE_KEY);
-    const list = raw ? JSON.parse(raw) : [];
-    return Array.isArray(list) ? list.filter(s => s && Array.isArray(s.map)) : [];
-  } catch (e) { return []; }
-}
-function saveCustomStages(list) {
-  try { localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(list)); return true; }
-  catch (e) { return false; }
-}
-let customStages = loadCustomStages();
 function allStages() {
-  return [...STAGES.map(s => ({ ...s, custom: false })), ...customStages.map((s, i) => ({ ...s, custom: true, customIndex: i }))];
+  return STAGES.map(s => ({ ...s, custom: false }));
 }
 
 /* =========================================================
@@ -871,14 +789,17 @@ function drawTileKey(g, key, px, py, c, opt = {}) {
       g.restore();
       break;
     }
-    case 'stop': {
-      g.strokeStyle = COLORS.stop;
-      g.lineWidth = Math.max(2, c * 0.06);
-      const r = c * 0.3;
+    case 'item': {
+      // 宝石のようなひし形
+      const r = c * 0.24, cx = px + c / 2, cy = py + c / 2;
+      g.fillStyle = COLORS.stop;
       g.beginPath();
-      g.moveTo(px + c / 2, py + c / 2 - r); g.lineTo(px + c / 2 + r, py + c / 2);
-      g.lineTo(px + c / 2, py + c / 2 + r); g.lineTo(px + c / 2 - r, py + c / 2);
-      g.closePath(); g.stroke();
+      g.moveTo(cx, cy - r); g.lineTo(cx + r, cy); g.lineTo(cx, cy + r); g.lineTo(cx - r, cy);
+      g.closePath(); g.fill();
+      g.fillStyle = 'rgba(255,255,255,0.45)';
+      g.beginPath();
+      g.moveTo(cx, cy - r); g.lineTo(cx + r * 0.45, cy - r * 0.15); g.lineTo(cx - r * 0.45, cy - r * 0.15);
+      g.closePath(); g.fill();
       break;
     }
     case 'crumble': {
@@ -926,7 +847,7 @@ function drawTileKey(g, key, px, py, c, opt = {}) {
   }
 }
 
-function drawFoot(g, x, y, c, color, label, alpha = 1) {
+function drawFoot(g, x, y, c, color, alpha = 1) {
   const r = c * 0.33;
   g.save();
   g.globalAlpha = alpha;
@@ -936,14 +857,6 @@ function drawFoot(g, x, y, c, color, label, alpha = 1) {
   g.beginPath();
   g.arc(x, y, r, 0, Math.PI * 2);
   g.fill();
-  g.restore();
-  g.save();
-  g.globalAlpha = alpha;
-  g.fillStyle = 'rgba(255,255,255,0.92)';
-  g.font = `700 ${Math.round(c * 0.3)}px sans-serif`;
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.fillText(label, x, y + 1);
   g.restore();
 }
 
@@ -1008,30 +921,28 @@ function startLevel(stage) {
   updateHud();
 }
 
-function currentPar() {
-  if (game.testing) return game.testing.par;
-  const st = game.stages[game.stageIndex];
-  if (!st) return null;
-  if (!st.custom) return game.par[game.stageIndex];
-  return null;
-}
-
 function updateHud() {
-  let label;
-  if (game.testing) label = 'テストプレイ' + (game.testing.stage.name ? `  ${game.testing.stage.name}` : '');
-  else {
-    const st = game.stages[game.stageIndex];
-    label = `${st.custom ? '★' : 'STAGE '}${game.stageIndex + 1}` + (st.name ? `  ${st.name}` : '');
+  // ステージ名や最短手数はヒントになるので表示しない
+  const sel = el('stageSelect');
+  sel.style.display = game.testing ? 'none' : '';
+  el('stageLabel').textContent = game.testing ? 'テストプレイ' : '';
+  if (!game.testing) {
+    if (sel.options.length !== game.stages.length) {
+      sel.innerHTML = '';
+      game.stages.forEach((st, i) => {
+        const o = document.createElement('option');
+        o.value = i;
+        o.textContent = `${st.custom ? '★' : 'STAGE '}${i + 1}`;
+        sel.appendChild(o);
+      });
+    }
+    sel.value = game.stageIndex;
   }
-  el('stageLabel').textContent = label;
   el('moveCount').textContent = game.moves;
-  const par = currentPar();
-  el('parLabel').textContent = par && par.moves >= 0 ? `/ 最短 ${par.moves}` : '';
   el('btnUndo').disabled = game.history.length === 0 || game.cleared;
   el('btnReset').disabled = game.history.length === 0 && !game.cleared;
   el('btnPrev').textContent = game.testing ? 'エディタへ' : '◀ 前';
   el('btnNext').style.visibility = game.testing ? 'hidden' : 'visible';
-  el('btnToEditor').textContent = game.testing ? 'エディタに戻る' : 'ステージエディタ';
 }
 
 function tryMove(move) {
@@ -1050,13 +961,8 @@ function onAnimEnd() {
   game.anim = null;
   if (isGoal(game.level, game.state)) {
     game.cleared = true;
-    const par = currentPar();
-    el('clearMoves').textContent = `${game.moves} 手でクリア`;
-    el('clearPar').textContent = par && par.moves >= 0
-      ? (game.moves <= par.moves ? '最短手数です！' : `最短は ${par.moves} 手`)
-      : '';
-    el('btnNextOverlay').textContent = game.testing ? 'エディタへ戻る'
-      : game.stageIndex === game.stages.length - 1 ? '最初のステージへ' : '次のステージへ';
+    el('clearMoves').textContent = `${game.moves} 手`;
+    el('btnNextOverlay').textContent = game.testing ? 'エディタへ戻る' : '次へ';
     overlay.classList.add('show');
     updateHud();
   }
@@ -1138,7 +1044,7 @@ function draw(now) {
     animating = t < 1;
   }
 
-  // 移動候補のハイライト（リングの色 = 動く足、ひし形 = 45°で止まる手）
+  // 移動候補のハイライト（リングの色 = 動く足）
   if (!game.anim && !game.cleared) {
     for (const [, group] of groupMovesByCell(getMoves(level, s))) {
       const to = group[0].to;
@@ -1151,12 +1057,7 @@ function draw(now) {
         g.lineWidth = 2;
         const r = c * (0.14 + i * 0.08);
         g.beginPath();
-        if (mv.kind === 'stop45') {
-          g.moveTo(cc.x, cc.y - r * 1.2); g.lineTo(cc.x + r * 1.2, cc.y);
-          g.lineTo(cc.x, cc.y + r * 1.2); g.lineTo(cc.x - r * 1.2, cc.y); g.closePath();
-        } else {
-          g.arc(cc.x, cc.y, r, 0, Math.PI * 2);
-        }
+        g.arc(cc.x, cc.y, r, 0, Math.PI * 2);
         g.stroke();
       });
     }
@@ -1171,8 +1072,8 @@ function draw(now) {
   g.lineTo(posB.x, posB.y);
   g.stroke();
 
-  drawFoot(g, posA.x, posA.y, c, COLORS.footA, 'A');
-  drawFoot(g, posB.x, posB.y, c, COLORS.footB, 'B');
+  drawFoot(g, posA.x, posA.y, c, COLORS.footA);
+  drawFoot(g, posB.x, posB.y, c, COLORS.footB);
   return animating;
 }
 
@@ -1188,8 +1089,7 @@ function showChooser(group, x, y) {
   chooser.innerHTML = '';
   for (const mv of group) {
     const b = document.createElement('button');
-    const foot = mv.mover === 'a' ? 'A' : 'B';
-    b.textContent = `${foot} を${mv.kind === 'stop45' ? '45°で止める' : '回す'}`;
+    b.className = 'footBtn';
     b.style.background = mv.mover === 'a' ? COLORS.footA : COLORS.footB;
     b.addEventListener('click', e => { e.stopPropagation(); tryMove(mv); });
     chooser.appendChild(b);
@@ -1231,385 +1131,16 @@ el('btnUndo').addEventListener('click', undo);
 el('btnReset').addEventListener('click', () => {
   if (game.testing) startLevel(game.testing.stage); else loadStage(game.stageIndex);
 });
-el('btnPrev').addEventListener('click', () => { if (game.testing) showEditor(); else loadStage(game.stageIndex - 1); });
+el('btnPrev').addEventListener('click', () => loadStage(game.stageIndex - 1));
 el('btnNext').addEventListener('click', () => loadStage(game.stageIndex + 1));
-el('btnNextOverlay').addEventListener('click', () => { if (game.testing) showEditor(); else loadStage(game.stageIndex + 1); });
-el('btnToEditor').addEventListener('click', () => {
-  if (!game.testing) {
-    const st = game.stages[game.stageIndex];
-    editor.loadStage(st, st.custom ? st.customIndex : null);
-  }
-  showEditor();
-});
+el('stageSelect').addEventListener('change', e => { loadStage(+e.target.value); e.target.blur(); });
+el('btnNextOverlay').addEventListener('click', () => loadStage(game.stageIndex + 1));
 window.addEventListener('keydown', e => {
   if (!el('playView').classList.contains('active') || e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.key === 'z' || e.key === 'Backspace') undo();
   if (e.key === 'r') el('btnReset').click();
 });
-window.addEventListener('resize', () => { resize(); editor.resize(); });
-
-/* =========================================================
- * ステージエディタ
- * ========================================================= */
-const PALETTE = [
-  'wall', 'floor', 'footA', 'footB', 'goal', 'goalA', 'goalB',
-  'triTL', 'triTR', 'triBL', 'triBR', 'stop', 'crumble', 'paint',
-  'peakU', 'peakD', 'peakR', 'peakL', 'switch', 'doorClosed', 'doorOpen',
-];
-
-const editor = {
-  w: 7, h: 9,
-  grid: [],            // タイル種別キーの2次元配列
-  a: null, b: null,    // 足の初期位置
-  tool: 'floor',
-  name: '',
-  customIndex: null,   // 自作ステージを編集中ならその番号
-  undoStack: [],
-  layout: null,
-  painting: false,
-  lastCell: null,
-
-  blank(w = 7, h = 9) {
-    this.w = w; this.h = h;
-    this.grid = [];
-    for (let y = 0; y < h; y++) {
-      const row = [];
-      for (let x = 0; x < w; x++) row.push(x === 0 || y === 0 || x === w - 1 || y === h - 1 ? 'wall' : 'floor');
-      this.grid.push(row);
-    }
-    this.a = { x: 1, y: 1 }; this.b = { x: 2, y: 1 };
-    this.name = ''; this.customIndex = null; this.undoStack = [];
-  },
-
-  loadStage(stage, customIndex = null) {
-    const rows = stage.map;
-    this.h = rows.length;
-    this.w = Math.max(...rows.map(r => r.length));
-    this.grid = []; this.a = null; this.b = null;
-    for (let y = 0; y < this.h; y++) {
-      const row = [];
-      for (let x = 0; x < this.w; x++) {
-        const ch = rows[y][x] || '#';
-        if (ch === 'A') this.a = { x, y };
-        if (ch === 'B') this.b = { x, y };
-        row.push(CHAR_TO_TILE[ch] || 'wall');
-      }
-      this.grid.push(row);
-    }
-    this.name = stage.name || '';
-    this.customIndex = customIndex;
-    this.undoStack = [];
-    this.sync();
-  },
-
-  toStage() {
-    const map = [];
-    for (let y = 0; y < this.h; y++) {
-      let line = '';
-      for (let x = 0; x < this.w; x++) {
-        if (this.a && this.a.x === x && this.a.y === y) line += 'A';
-        else if (this.b && this.b.x === x && this.b.y === y) line += 'B';
-        else line += TILE_TYPES[this.grid[y][x]].char;
-      }
-      map.push(line);
-    }
-    return { name: this.name.trim(), map };
-  },
-
-  snapshot() {
-    this.undoStack.push(JSON.stringify({ w: this.w, h: this.h, grid: this.grid, a: this.a, b: this.b }));
-    if (this.undoStack.length > 100) this.undoStack.shift();
-  },
-  undo() {
-    const s = this.undoStack.pop();
-    if (!s) return;
-    Object.assign(this, JSON.parse(s));
-    this.sync();
-  },
-
-  resizeGrid(dw, dh) {
-    const nw = Math.min(20, Math.max(3, this.w + dw)), nh = Math.min(24, Math.max(3, this.h + dh));
-    if (nw === this.w && nh === this.h) return;
-    this.snapshot();
-    const ng = [];
-    for (let y = 0; y < nh; y++) {
-      const row = [];
-      for (let x = 0; x < nw; x++) row.push(y < this.h && x < this.w ? this.grid[y][x] : 'wall');
-      ng.push(row);
-    }
-    this.grid = ng; this.w = nw; this.h = nh;
-    if (this.a && (this.a.x >= nw || this.a.y >= nh)) this.a = null;
-    if (this.b && (this.b.x >= nw || this.b.y >= nh)) this.b = null;
-    this.sync();
-  },
-
-  applyTool(x, y) {
-    if (x < 0 || y < 0 || x >= this.w || y >= this.h) return;
-    const t = this.tool;
-    if (t === 'footA' || t === 'footB') {
-      const key = t === 'footA' ? 'a' : 'b', other = t === 'footA' ? 'b' : 'a';
-      if (this[other] && this[other].x === x && this[other].y === y) this[other] = null;
-      this[key] = { x, y };
-      this.grid[y][x] = 'floor'; // A/B のマスは床扱い
-    } else {
-      this.grid[y][x] = t;
-      for (const k of ['a', 'b']) if (this[k] && this[k].x === x && this[k].y === y) this[k] = null;
-    }
-  },
-
-  sync() {
-    el('edW').textContent = this.w;
-    el('edH').textContent = this.h;
-    el('edName').value = this.name;
-    el('btnEdDelete').disabled = this.customIndex === null;
-    this.resize();
-  },
-
-  resize() {
-    if (!el('editView').classList.contains('active')) return;
-    this.layout = fitCanvas(el('edCanvas'), el('edWrap'), this.w, this.h);
-    this.draw();
-  },
-
-  draw() {
-    const L = this.layout;
-    if (!L) return;
-    const g = L.g, c = L.cell;
-    g.clearRect(0, 0, L.w, L.h);
-    for (let y = 0; y < this.h; y++) for (let x = 0; x < this.w; x++) {
-      drawTileKey(g, this.grid[y][x], x * c, y * c, c, { wallMode: 'always' });
-    }
-    // グリッド線
-    g.strokeStyle = 'rgba(255,255,255,0.08)';
-    g.lineWidth = 1;
-    for (let x = 0; x <= this.w; x++) { g.beginPath(); g.moveTo(x * c + 0.5, 0); g.lineTo(x * c + 0.5, L.h); g.stroke(); }
-    for (let y = 0; y <= this.h; y++) { g.beginPath(); g.moveTo(0, y * c + 0.5); g.lineTo(L.w, y * c + 0.5); g.stroke(); }
-    if (this.a && this.b && Math.abs(this.a.x - this.b.x) + Math.abs(this.a.y - this.b.y) === 1) {
-      g.strokeStyle = COLORS.leg; g.lineWidth = c * 0.14; g.lineCap = 'round';
-      g.beginPath(); g.moveTo((this.a.x + 0.5) * c, (this.a.y + 0.5) * c); g.lineTo((this.b.x + 0.5) * c, (this.b.y + 0.5) * c); g.stroke();
-    }
-    if (this.a) drawFoot(g, (this.a.x + 0.5) * c, (this.a.y + 0.5) * c, c, COLORS.footA, 'A');
-    if (this.b) drawFoot(g, (this.b.x + 0.5) * c, (this.b.y + 0.5) * c, c, COLORS.footB, 'B');
-  },
-
-  status(msg, cls = '') {
-    const s = el('edStatus');
-    s.textContent = msg;
-    s.className = cls;
-  },
-
-  check() {
-    try {
-      const level = parseStage(this.toStage());
-      const r = solve(level);
-      this.status(describeSolve(r), r.moves >= 0 && r.routes === 1 ? 'ok' : 'ng');
-      return { level, r };
-    } catch (e) {
-      this.status(e.message, 'ng');
-      return null;
-    }
-  },
-};
-
-function buildPalette() {
-  const pal = el('palette');
-  pal.innerHTML = '';
-  for (const key of PALETTE) {
-    const div = document.createElement('button');
-    div.className = 'tool' + (editor.tool === key ? ' sel' : '');
-    const cv = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
-    cv.width = 30 * dpr; cv.height = 30 * dpr;
-    const g = cv.getContext('2d');
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    let label;
-    if (key === 'footA' || key === 'footB') {
-      drawTileKey(g, 'floor', 0, 0, 30);
-      drawFoot(g, 15, 15, 30, key === 'footA' ? COLORS.footA : COLORS.footB, key === 'footA' ? 'A' : 'B');
-      label = key === 'footA' ? '足A' : '足B';
-    } else {
-      drawTileKey(g, key, 0, 0, 30, { wallMode: 'always' });
-      label = TILE_TYPES[key].label;
-    }
-    div.appendChild(cv);
-    const span = document.createElement('span');
-    span.textContent = label;
-    div.appendChild(span);
-    div.addEventListener('click', () => {
-      editor.tool = key;
-      buildPalette();
-    });
-    pal.appendChild(div);
-  }
-}
-
-function refreshOpenList() {
-  const sel = el('edOpen');
-  sel.innerHTML = '';
-  const head = document.createElement('option');
-  head.textContent = 'ステージを開く…';
-  head.value = '';
-  sel.appendChild(head);
-  allStages().forEach((st, i) => {
-    const o = document.createElement('option');
-    o.value = i;
-    o.textContent = `${st.custom ? '★' : ''}${i + 1}. ${st.name || '(名前なし)'}`;
-    sel.appendChild(o);
-  });
-}
-
-function showEditor() {
-  el('playView').classList.remove('active');
-  el('editView').classList.add('active');
-  hideChooser();
-  refreshOpenList();
-  buildPalette();
-  editor.sync();
-}
-function showPlay() {
-  el('editView').classList.remove('active');
-  el('playView').classList.add('active');
-  resize();
-}
-
-/* ---------- エディタの入力 ---------- */
-const edCanvas = el('edCanvas');
-function edCell(ev) {
-  const rect = edCanvas.getBoundingClientRect();
-  return { x: Math.floor((ev.clientX - rect.left) / editor.layout.cell), y: Math.floor((ev.clientY - rect.top) / editor.layout.cell) };
-}
-edCanvas.addEventListener('pointerdown', ev => {
-  ev.preventDefault();
-  edCanvas.setPointerCapture(ev.pointerId);
-  editor.snapshot();
-  editor.painting = true;
-  const p = edCell(ev);
-  editor.lastCell = p.x + ',' + p.y;
-  editor.applyTool(p.x, p.y);
-  editor.draw();
-});
-edCanvas.addEventListener('pointermove', ev => {
-  if (!editor.painting) return;
-  const p = edCell(ev);
-  const k = p.x + ',' + p.y;
-  if (k === editor.lastCell) return;
-  editor.lastCell = k;
-  if (editor.tool === 'footA' || editor.tool === 'footB') return; // 足はなぞらない
-  editor.applyTool(p.x, p.y);
-  editor.draw();
-});
-const endPaint = () => { editor.painting = false; editor.lastCell = null; };
-edCanvas.addEventListener('pointerup', endPaint);
-edCanvas.addEventListener('pointercancel', endPaint);
-
-document.querySelectorAll('[data-size]').forEach(b => b.addEventListener('click', () => {
-  const v = b.dataset.size;
-  editor.resizeGrid(v === 'w+' ? 1 : v === 'w-' ? -1 : 0, v === 'h+' ? 1 : v === 'h-' ? -1 : 0);
-}));
-el('edName').addEventListener('input', e => { editor.name = e.target.value; });
-el('edOpen').addEventListener('change', e => {
-  if (e.target.value === '') return;
-  const st = allStages()[+e.target.value];
-  editor.loadStage(st, st.custom ? st.customIndex : null);
-  editor.status(`「${st.name || '名前なし'}」を開きました${st.custom ? '' : '（保存すると自作ステージとして追加されます）'}`);
-  e.target.value = '';
-});
-el('btnEdNew').addEventListener('click', () => { editor.blank(); editor.sync(); editor.status('新しいステージ'); });
-el('btnEdUndo').addEventListener('click', () => editor.undo());
-el('btnEdClear').addEventListener('click', () => {
-  editor.snapshot();
-  const keep = { name: editor.name, customIndex: editor.customIndex, undo: editor.undoStack };
-  editor.blank(editor.w, editor.h);
-  editor.name = keep.name; editor.customIndex = keep.customIndex; editor.undoStack = keep.undo;
-  editor.sync();
-});
-el('btnEdCheck').addEventListener('click', () => editor.check());
-el('btnEdTest').addEventListener('click', () => {
-  const res = editor.check();
-  if (!res) return;
-  const stage = editor.toStage();
-  game.testing = { stage, par: res.r };
-  showPlay();
-  startLevel(stage);
-  game.testing = { stage, par: res.r }; // startLevel 後も保持
-  updateHud();
-});
-el('btnEdSave').addEventListener('click', () => {
-  const stage = editor.toStage();
-  try { parseStage(stage); } catch (e) { editor.status('保存できません: ' + e.message, 'ng'); return; }
-  if (!stage.name) stage.name = `自作${customStages.length + 1}`;
-  if (editor.customIndex === null) { customStages.push(stage); editor.customIndex = customStages.length - 1; }
-  else customStages[editor.customIndex] = stage;
-  editor.name = stage.name;
-  const ok = saveCustomStages(customStages);
-  editor.sync();
-  refreshOpenList();
-  editor.status(ok ? `保存しました（★${STAGES.length + editor.customIndex + 1}）。プレイ画面のステージ一覧の最後に入ります` : 'このブラウザでは保存できませんでした。書き出しでコピーしてください', ok ? 'ok' : 'ng');
-});
-el('btnEdDelete').addEventListener('click', () => {
-  if (editor.customIndex === null) return;
-  if (!confirm('この自作ステージを削除しますか？')) return;
-  customStages.splice(editor.customIndex, 1);
-  saveCustomStages(customStages);
-  editor.customIndex = null;
-  editor.sync();
-  refreshOpenList();
-  editor.status('削除しました');
-});
-
-/* ---------- 書き出し / 読み込み ---------- */
-let modalHandler = null;
-function openModal(title, note, text, okLabel, handler) {
-  el('modalTitle').textContent = title;
-  el('modalNote').textContent = note;
-  el('modalText').value = text;
-  el('modalOk').textContent = okLabel;
-  modalHandler = handler;
-  el('modal').classList.add('show');
-}
-el('modalCancel').addEventListener('click', () => el('modal').classList.remove('show'));
-el('modalOk').addEventListener('click', () => { if (modalHandler && modalHandler(el('modalText').value) !== false) el('modal').classList.remove('show'); });
-
-function stageToCode(stage) {
-  const esc = s => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-  return `  { name: '${esc(stage.name || '')}', map: [\n${stage.map.map(r => `    '${esc(r)}',`).join('\n')}\n  ]},`;
-}
-/** 貼り付けたテキストからステージを読み取る（コード片・JSON・マップの行そのまま、のどれでも可） */
-function parseStageText(text) {
-  const nameMatch = text.match(/name\s*:\s*(['"])((?:\\.|(?!\1).)*)\1/);
-  const body = text.replace(/name\s*:\s*(['"])((?:\\.|(?!\1).)*)\1/, '');
-  const strs = [...body.matchAll(/(['"])((?:\\.|(?!\1).)*)\1/g)].map(m => m[2].replace(/\\(.)/g, '$1')).filter(s => s.length && s !== 'map');
-  let map = strs;
-  if (!map.length) map = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  return { name: nameMatch ? nameMatch[2] : '', map };
-}
-el('btnEdExport').addEventListener('click', () => {
-  const code = stageToCode(editor.toStage());
-  openModal('書き出し', 'このテキストを index.html の STAGES 配列に貼り付けると組み込みステージになります', code, 'コピー', text => {
-    const ta = el('modalText');
-    ta.focus(); ta.select();
-    let done = false;
-    try { done = document.execCommand('copy'); } catch (e) { /* noop */ }
-    if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
-    editor.status(done || navigator.clipboard ? 'コピーしました' : 'テキストを選択してコピーしてください');
-  });
-});
-el('btnEdImport').addEventListener('click', () => {
-  openModal('読み込み', '書き出したテキスト、またはマップの行（# . A B など）を貼り付けてください', '', '読み込む', text => {
-    const st = parseStageText(text);
-    if (!st.map.length) { alert('マップが見つかりません'); return false; }
-    for (const row of st.map) for (const ch of row) if (!CHAR_TO_TILE[ch]) { alert(`未知のマス文字 "${ch}"`); return false; }
-    editor.snapshot();
-    const undo = editor.undoStack;
-    editor.loadStage(st, null);
-    editor.undoStack = undo;
-    editor.status('読み込みました');
-  });
-});
-el('btnEdToPlay').addEventListener('click', () => {
-  showPlay();
-  loadStage(game.testing ? 0 : Math.min(game.stageIndex, allStages().length - 1));
-});
+window.addEventListener('resize', resize);
 
 /* =========================================================
  * 起動
@@ -1636,8 +1167,7 @@ function verifyAllStages() {
   return results;
 }
 
-game.par = verifyAllStages();
-editor.blank();
+verifyAllStages();
 loadStage(0);
 </script>
 </body>
