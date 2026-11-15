@@ -79,7 +79,7 @@
   <header>
     <select id="stageSelect" aria-label="ステージ"></select>
     <div id="stageLabel"></div>
-    <div id="info"><span id="slideCount"></span><b id="moveCount">0</b> 手</div>
+    <div id="info"><b id="moveCount">0</b> 手</div>
   </header>
   <div class="boardWrap" id="boardWrap">
     <canvas id="board"></canvas>
@@ -167,6 +167,13 @@ const TERRAINS = {
   peakL: peakTerrain('<',  1,  0, '山 ◀'),
 };
 
+function arrowGimmick(char, dx, dy, label) {
+  return {
+    char, label, group: 'arrow', arrow: { x: dx, y: dy },
+    onEnter(s, level, idx) { s.arrows = setBit(s.arrows, level.arrowBit.get(idx)); s.shift = { x: dx, y: dy }; },
+  };
+}
+
 const GIMMICKS = {
   goal:  { char: 'G', label: 'ゴール', group: 'goal', goalFor: ['A', 'B'] },
   goalA: { char: 'R', label: 'A専用',  group: 'goal', goalFor: ['A'] },
@@ -176,11 +183,11 @@ const GIMMICKS = {
     char: 'O', label: '45°アイテム', group: 'item',
     onEnter(s, level, idx) { s.items = setBit(s.items, level.itemBit.get(idx)); },
   },
-  // スライドアイテム: 足が乗ると取れる（消える）。持っている数だけ、形のまま上下左右に1マス動ける
-  slide: {
-    char: 'M', label: 'スライド', group: 'slide',
-    onEnter(s, level, idx) { s.sitems = setBit(s.sitems, level.slideBit.get(idx)); s.slides++; },
-  },
+  // 矢印アイテム: 足が乗ると取れて（消えて）、駒が形のまま矢印の向きへ1マスずれる
+  arrowN: arrowGimmick('n',  0, -1, '矢印 ↑'),
+  arrowE: arrowGimmick('e',  1,  0, '矢印 →'),
+  arrowS: arrowGimmick('s',  0,  1, '矢印 ↓'),
+  arrowW: arrowGimmick('w', -1,  0, '矢印 ←'),
   // 崩れる床: 足が離れると穴になる（穴には乗れないが、回転で上を通過はできる）
   crumble: {
     char: 'C', label: '崩れる床', group: 'crumble',
@@ -197,7 +204,7 @@ const GIMMICKS = {
   },
 };
 // 足が乗った／離れたときに効果を処理する順番
-const GIMMICK_ORDER = ['item', 'slide', 'paint', 'switch', 'crumble', 'goal', 'goalA', 'goalB', 'doorClosed', 'doorOpen'];
+const GIMMICK_ORDER = ['item', 'arrowN', 'arrowE', 'arrowS', 'arrowW', 'paint', 'switch', 'crumble', 'goal', 'goalA', 'goalB', 'doorClosed', 'doorOpen'];
 
 const CHAR_TO_TERRAIN = {}, CHAR_TO_GIMMICK = {};
 for (const [k, t] of Object.entries(TERRAINS)) CHAR_TO_TERRAIN[t.char] = k;
@@ -448,10 +455,10 @@ const STAGES = [
   ]},
   { name: 'ずらす', map: [
     '########',
-    '#....MR#',
+    '#.....R#',
     '#......#',
     '#......#',
-    '#......#',
+    '#s.....#',
     '#AB....#',
     '########',
   ]},
@@ -471,7 +478,7 @@ function tokenizeStage(rows) {
 function parseStage(stage) {
   const { grid, w, h } = tokenizeStage(stage.map);
   let a = null, b = null;
-  const crumbleBit = new Map(), paintBit = new Map(), itemBit = new Map(), slideBit = new Map();
+  const crumbleBit = new Map(), paintBit = new Map(), itemBit = new Map(), arrowBit = new Map();
   const goals = { A: { own: false, shared: false }, B: { own: false, shared: false } };
   const cells = [];
   for (let y = 0; y < h; y++) {
@@ -486,7 +493,7 @@ function parseStage(stage) {
         if (m === 'crumble') crumbleBit.set(idx, crumbleBit.size);
         if (m === 'paint') paintBit.set(idx, paintBit.size);
         if (m === 'item') itemBit.set(idx, itemBit.size);
-        if (m === 'slide') slideBit.set(idx, slideBit.size);
+        if (GIMMICKS[m].group === 'arrow') arrowBit.set(idx, arrowBit.size);
         if (GIMMICKS[m].group === 'goal') {
           cell.goal = m;
           const gf = GIMMICKS[m].goalFor;
@@ -502,10 +509,10 @@ function parseStage(stage) {
   if (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) !== 1) throw new Error('A と B は上下左右に隣接している必要があります');
   const hasFootGoal = goals.A.own || goals.A.shared || goals.B.own || goals.B.shared;
   if (!hasFootGoal && paintBit.size === 0) throw new Error('ゴール（G / R / U / P）がありません');
-  const level = { w, h, cells, start: null, goals, hasFootGoal, crumbleBit, paintBit, itemBit, slideBit };
+  const level = { w, h, cells, start: null, goals, hasFootGoal, crumbleBit, paintBit, itemBit, arrowBit };
   // 初期状態（最初に乗っているマスの塗りは反映する）
   const s0 = { a, b, door: 0, broken: '0'.repeat(crumbleBit.size), painted: '0'.repeat(paintBit.size), items: '0'.repeat(itemBit.size),
-    sitems: '0'.repeat(slideBit.size), slides: 0 };
+    arrows: '0'.repeat(arrowBit.size) };
   for (const p of [a, b]) {
     const idx = p.y * w + p.x;
     if (paintBit.has(idx)) s0.painted = setBit(s0.painted, paintBit.get(idx));
@@ -518,7 +525,7 @@ function parseStage(stage) {
 /* =========================================================
  * ルール（盤面とは独立した純粋関数。ソルバーとゲームで共用）
  * 状態 s = { a:{x,y}, b:{x,y}, door:0|1, broken:'0101', painted:'0011', items:'01',
- *          sitems:'01'（取ったスライドアイテム）, slides: 持っているスライドの数 }
+ *          arrows:'01'（取った矢印アイテム） }
  * ========================================================= */
 function cellAt(level, x, y) {
   if (x < 0 || y < 0 || x >= level.w || y >= level.h) return null;
@@ -537,7 +544,7 @@ function cellView(level, s, x, y) {
     crumble: has('crumble'), broken,
     door: c.door, doorClosed: !!c.door && !doorOpen,
     item: has('item') && s.items[level.itemBit.get(idx)] !== '1',
-    slideItem: has('slide') && s.sitems[level.slideBit.get(idx)] !== '1',
+    arrow: (() => { const m = c.mods.find(k => GIMMICKS[k].group === 'arrow'); return m && s.arrows[level.arrowBit.get(idx)] !== '1' ? m : null; })(),
     paint: has('paint'), painted: has('paint') && s.painted[level.paintBit.get(idx)] === '1',
     switch: has('switch'), goal: c.goal,
   };
@@ -562,42 +569,61 @@ function canPassEdge(level, s, x, y, fx, fy) {
 }
 
 function cloneState(s) {
-  return { a: { ...s.a }, b: { ...s.b }, door: s.door, broken: s.broken, painted: s.painted, items: s.items, sitems: s.sitems, slides: s.slides };
+  return { a: { ...s.a }, b: { ...s.b }, door: s.door, broken: s.broken, painted: s.painted, items: s.items, arrows: s.arrows };
 }
 function stateKey(s) {
-  return `${s.a.x},${s.a.y}|${s.b.x},${s.b.y}|${s.door}|${s.broken}|${s.painted}|${s.items}|${s.sitems}|${s.slides}`;
+  return `${s.a.x},${s.a.y}|${s.b.x},${s.b.y}|${s.door}|${s.broken}|${s.painted}|${s.items}|${s.arrows}`;
 }
 
-/** 動かした結果の状態を返す（マスの効果を反映）。成立しなければ null */
+/**
+ * 動かした結果の状態を返す（マスの効果を反映）。成立しなければ null。
+ * 矢印アイテムでずれたときは、途中の状態を steps に入れる（アニメーション用）。
+ */
 function applyMove(level, s, mv) {
   const ns = cloneState(s);
-  if (mv.kind === 'slide') {
-    ns.a = { x: s.a.x + mv.d.x, y: s.a.y + mv.d.y };
-    ns.b = { x: s.b.x + mv.d.x, y: s.b.y + mv.d.y };
-    ns.slides--;
-  } else {
-    ns[mv.mover] = { ...mv.to };
-  }
+  ns[mv.mover] = { ...mv.to };
+  const steps = [];
+  const r = settle(level, s, ns, steps, 0);
+  if (r) r._steps = steps;
+  return r;
+}
+
+/** prev → ns で足が離れた／乗ったマスの効果を起こし、矢印でずれるなら続けて処理する */
+function settle(level, prev, ns, steps, depth) {
   // 足がいなくなったマスは「離れた」、新しく足が来たマスは「乗った」として効果を起こす
   const same = (p, q) => p.x === q.x && p.y === q.y;
-  const before = [s.a, s.b], after = [ns.a, ns.b];
+  const before = [prev.a, prev.b], after = [ns.a, ns.b];
+  ns.shift = null;
   for (const p of before) {
     if (after.some(q => same(p, q))) continue;
     for (const m of cellAt(level, p.x, p.y).mods) if (GIMMICKS[m].onLeave) GIMMICKS[m].onLeave(ns, level, p.y * level.w + p.x);
   }
   for (const p of after) {
     if (before.some(q => same(p, q))) continue;
-    const v = cellView(level, s, p.x, p.y);
+    const v = cellView(level, prev, p.x, p.y);
     for (const m of v.cell.mods) {
-      if (m === 'item' && !v.item) continue;       // 取られたアイテムは何もしない
-      if (m === 'slide' && !v.slideItem) continue;
+      if (m === 'item' && !v.item) continue;                              // 取られたアイテムは何もしない
+      if (GIMMICKS[m].group === 'arrow' && v.arrow !== m) continue;
       if (GIMMICKS[m].onEnter) GIMMICKS[m].onEnter(ns, level, v.idx);
     }
   }
   // 効果のあと（扉が閉じた等）でも両足が立てること
   if (!canStand(level, ns, ns.a.x, ns.a.y) || !canStand(level, ns, ns.b.x, ns.b.y)) return null;
-  if (ns.a.x === ns.b.x && ns.a.y === ns.b.y) return null;
-  return ns;
+  if (same(ns.a, ns.b)) return null;
+  const shift = ns.shift;
+  delete ns.shift;
+  steps.push(ns);
+  if (!shift) return ns;
+  // 矢印の向きへ形のまま1マスずれる。ずれる先に乗れない・45°アイテムがあるときは、この手自体が成立しない
+  if (depth > 30) return null;
+  const n2 = cloneState(ns);
+  n2.a = { x: ns.a.x + shift.x, y: ns.a.y + shift.y };
+  n2.b = { x: ns.b.x + shift.x, y: ns.b.y + shift.y };
+  for (const p of [n2.a, n2.b]) {
+    if (same(p, ns.a) || same(p, ns.b)) continue;
+    if (!canStand(level, ns, p.x, p.y) || isItem(level, ns, p.x, p.y)) return null;
+  }
+  return settle(level, ns, n2, steps, depth + 1);
 }
 
 /**
@@ -605,7 +631,7 @@ function applyMove(level, s, mv) {
  * 戻り値: [{ pivot, mover, to, dir(+1 時計回り / -1 反時計回り), angle(π/2 か π/4), kind, next }]
  *   kind: 'turn90' 通常の90°回転 / 'stop45' 45°回ってアイテムを取り斜めになる
  *         / 'turn45' 斜めの姿勢から45°回ってアイテムを取り縦横に戻る / 'turnDiag' 斜めの姿勢のまま90°回る
- *         / 'slide' スライドアイテムを使って形のまま1マス動く（mover: 'both', d: 向き, targets: 新しく入るマス）
+ * 矢印アイテムのマスに入ると、そのあと形のまま矢印の向きへずれる（mv.next は最後の状態、mv.steps は途中の状態）。
  * アイテムのマスには45°回って入るときだけ入れる（90°回転では入れない）。
  */
 function getMoves(level, s) {
@@ -618,6 +644,7 @@ function getMoves(level, s) {
     if (seen.has(k)) return;
     seen.add(k);
     mv.next = next;
+    mv.steps = next._steps;
     result.push(mv);
   };
   for (const pivot of ['a', 'b']) {
@@ -659,16 +686,6 @@ function getMoves(level, s) {
           push({ pivot, mover, to, dir, angle: Math.PI / 2, kind: 'turnDiag' });
         }
       }
-    }
-  }
-  // スライド（スライドアイテムを持っているとき）。45°アイテムのマスには入れない
-  if (s.slides > 0) {
-    for (const d of [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]) {
-      const na = { x: s.a.x + d.x, y: s.a.y + d.y }, nb = { x: s.b.x + d.x, y: s.b.y + d.y };
-      if (!canStand(level, s, na.x, na.y) || !canStand(level, s, nb.x, nb.y)) continue;
-      const targets = [na, nb].filter(p => !(p.x === s.a.x && p.y === s.a.y) && !(p.x === s.b.x && p.y === s.b.y));
-      if (targets.some(p => isItem(level, s, p.x, p.y))) continue;
-      push({ mover: 'both', kind: 'slide', d, to: targets[0], targets });
     }
   }
   return result;
@@ -787,7 +804,7 @@ const COLORS = {
   footA: '#ef476f',
   footB: '#3a86ff',
   stop: '#2ec4b6',
-  slide: '#f4a340',
+  arrow: '#f4a340',
   switchCol: '#b388ff',
   paint: '#8bd17c',
   crumble: '#5a4a3a',
@@ -811,7 +828,7 @@ function staticView(terrain, mods = []) {
   const door = mods.find(m => GIMMICKS[m].group === 'door') || null;
   return {
     terrain, crumble: has('crumble'), broken: false, door, doorClosed: door === 'doorClosed',
-    item: has('item'), slideItem: has('slide'), paint: has('paint'), painted: false, switch: has('switch'),
+    item: has('item'), arrow: mods.find(m => GIMMICKS[m].group === 'arrow') || null, paint: has('paint'), painted: false, switch: has('switch'),
     goal: mods.find(m => GIMMICKS[m].group === 'goal') || null,
   };
 }
@@ -935,21 +952,17 @@ function drawCell(g, v, px, py, c, opt = {}) {
     g.moveTo(cx, cy - r); g.lineTo(cx + r * 0.45, cy - r * 0.15); g.lineTo(cx - r * 0.45, cy - r * 0.15);
     g.closePath(); g.fill();
   }
-  if (v.slideItem) {
-    // 上下左右の矢印
-    const cx = px + c / 2, cy = py + c / 2, L = c * 0.3, hw = c * 0.09;
+  if (v.arrow) {
+    // 矢印（向き = ずれる方向）
+    const { x: dx, y: dy } = GIMMICKS[v.arrow].arrow;
+    const cx = px + c / 2, cy = py + c / 2, L = c * 0.3, hw = c * 0.17;
+    const rot = (x, y) => [cx + x * dx - y * dy, cy + x * dy + y * dx]; // (1,0) を矢印の向きに回す
     g.save();
-    g.strokeStyle = COLORS.slide; g.fillStyle = COLORS.slide;
-    g.lineWidth = Math.max(2, c * 0.06); g.lineCap = 'round';
-    g.beginPath(); g.moveTo(cx - L + hw, cy); g.lineTo(cx + L - hw, cy); g.moveTo(cx, cy - L + hw); g.lineTo(cx, cy + L - hw); g.stroke();
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const tx = cx + dx * L, ty = cy + dy * L;
-      g.beginPath();
-      g.moveTo(tx, ty);
-      g.lineTo(tx - dx * hw * 1.6 - dy * hw, ty - dy * hw * 1.6 - dx * hw);
-      g.lineTo(tx - dx * hw * 1.6 + dy * hw, ty - dy * hw * 1.6 + dx * hw);
-      g.closePath(); g.fill();
-    }
+    g.fillStyle = COLORS.arrow;
+    const pts = [[L, 0], [L - hw * 1.3, -hw], [L - hw * 1.3, -hw * 0.42], [-L, -hw * 0.42], [-L, hw * 0.42], [L - hw * 1.3, hw * 0.42], [L - hw * 1.3, hw]];
+    g.beginPath();
+    pts.forEach(([x, y], i) => { const [X, Y] = rot(x, y); if (i) g.lineTo(X, Y); else g.moveTo(X, Y); });
+    g.closePath(); g.fill();
     g.restore();
   }
   if (v.door) {
@@ -1067,8 +1080,6 @@ function updateHud() {
     sel.value = game.stageIndex;
   }
   el('moveCount').textContent = game.moves;
-  const sc = game.state ? game.state.slides : 0;
-  el('slideCount').innerHTML = sc > 0 ? `<span style="color:${COLORS.slide};font-size:20px;margin-right:12px;">✥${sc > 1 ? sc : ''}</span>` : '';
   el('btnUndo').disabled = game.history.length === 0 || game.cleared;
   el('btnReset').disabled = game.history.length === 0 && !game.cleared;
   el('btnPrev').textContent = game.testing ? 'エディタへ' : '◀ 前';
@@ -1157,26 +1168,31 @@ function draw(now) {
   let posB = cellCenter(s.b.x, s.b.y);
   let animating = false;
   if (game.anim) {
-    const t = Math.min(1, ((now || performance.now()) - game.anim.start) / CONFIG.ANIM_MS);
-    const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad
+    // 1段目: 回転。2段目以降: 矢印アイテムでずれる（直線移動）
     const { move, from } = game.anim;
-    if (move.kind === 'slide') {
-      const lerp = (p, q) => ({ x: p.x + (q.x - p.x) * e, y: p.y + (q.y - p.y) * e });
-      posA = lerp(cellCenter(from.a.x, from.a.y), cellCenter(move.next.a.x, move.next.a.y));
-      posB = lerp(cellCenter(from.b.x, from.b.y), cellCenter(move.next.b.x, move.next.b.y));
-      animating = t < 1;
+    const steps = move.steps || [move.next];
+    const elapsed = Math.max(0, ((now || performance.now()) - game.anim.start) / CONFIG.ANIM_MS);
+    const phase = Math.min(steps.length - 1, Math.floor(elapsed));
+    const t = Math.min(1, elapsed - phase);
+    const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad
+    if (phase === 0) {
+      const p = cellCenter(from[move.pivot].x, from[move.pivot].y);
+      const m0 = cellCenter(from[move.mover].x, from[move.mover].y);
+      const m1 = cellCenter(move.to.x, move.to.y);
+      const a0 = Math.atan2(m0.y - p.y, m0.x - p.x);
+      const r0 = Math.hypot(m0.x - p.x, m0.y - p.y), r1 = Math.hypot(m1.x - p.x, m1.y - p.y);
+      const ang = a0 + move.dir * move.angle * e;
+      const rad = r0 + (r1 - r0) * e;
+      const mp = { x: p.x + Math.cos(ang) * rad, y: p.y + Math.sin(ang) * rad };
+      posA = cellCenter(from.a.x, from.a.y); posB = cellCenter(from.b.x, from.b.y);
+      if (move.mover === 'a') posA = mp; else posB = mp;
     } else {
-    const p = cellCenter(from[move.pivot].x, from[move.pivot].y);
-    const m0 = cellCenter(from[move.mover].x, from[move.mover].y);
-    const m1 = cellCenter(move.to.x, move.to.y);
-    const a0 = Math.atan2(m0.y - p.y, m0.x - p.x);
-    const r0 = Math.hypot(m0.x - p.x, m0.y - p.y), r1 = Math.hypot(m1.x - p.x, m1.y - p.y);
-    const ang = a0 + move.dir * move.angle * e;
-    const rad = r0 + (r1 - r0) * e;
-    const mp = { x: p.x + Math.cos(ang) * rad, y: p.y + Math.sin(ang) * rad };
-    if (move.mover === 'a') posA = mp; else posB = mp;
-    animating = t < 1;
+      const s0 = steps[phase - 1], s1 = steps[phase];
+      const lerp = (p, q) => ({ x: p.x + (q.x - p.x) * e, y: p.y + (q.y - p.y) * e });
+      posA = lerp(cellCenter(s0.a.x, s0.a.y), cellCenter(s1.a.x, s1.a.y));
+      posB = lerp(cellCenter(s0.b.x, s0.b.y), cellCenter(s1.b.x, s1.b.y));
     }
+    animating = elapsed < steps.length;
   }
 
   // 移動候補のハイライト（リングの色 = 動く足）
@@ -1189,7 +1205,7 @@ function draw(now) {
       roundRect(g, to.x * c + 3, to.y * c + 3, c - 6, c - 6, c * 0.14);
       g.fill();
       group.forEach((mv, i) => {
-        g.strokeStyle = mv.mover === 'a' ? 'rgba(239,71,111,0.75)' : mv.mover === 'b' ? 'rgba(58,134,255,0.75)' : 'rgba(244,163,64,0.85)';
+        g.strokeStyle = mv.mover === 'a' ? 'rgba(239,71,111,0.75)' : 'rgba(58,134,255,0.75)';
         g.lineWidth = 2;
         const r = c * (0.14 + i * 0.08);
         g.beginPath();
@@ -1226,9 +1242,7 @@ function showChooser(group, x, y) {
   for (const mv of group) {
     const b = document.createElement('button');
     b.className = 'footBtn';
-    b.style.background = mv.mover === 'a' ? COLORS.footA : mv.mover === 'b' ? COLORS.footB
-      : `linear-gradient(90deg, ${COLORS.footA} 50%, ${COLORS.footB} 50%)`; // 両足ごと動く（スライド）
-    if (mv.mover === 'both') b.style.border = `3px solid ${COLORS.slide}`;
+    b.style.background = mv.mover === 'a' ? COLORS.footA : COLORS.footB;
     b.addEventListener('click', e => { e.stopPropagation(); tryMove(mv); });
     chooser.appendChild(b);
   }
