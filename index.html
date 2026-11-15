@@ -120,7 +120,7 @@
   <header>
     <select id="stageSelect" aria-label="ステージ"></select>
     <div id="stageLabel"></div>
-    <div id="info"><b id="moveCount">0</b> 手</div>
+    <div id="info"><span id="slideCount"></span><b id="moveCount">0</b> 手</div>
   </header>
   <div class="boardWrap" id="boardWrap">
     <canvas id="board"></canvas>
@@ -266,6 +266,11 @@ const GIMMICKS = {
     char: 'O', label: '45°アイテム', group: 'item',
     onEnter(s, level, idx) { s.items = setBit(s.items, level.itemBit.get(idx)); },
   },
+  // スライドアイテム: 足が乗ると取れる（消える）。持っている数だけ、形のまま上下左右に1マス動ける
+  slide: {
+    char: 'M', label: 'スライド', group: 'slide',
+    onEnter(s, level, idx) { s.sitems = setBit(s.sitems, level.slideBit.get(idx)); s.slides++; },
+  },
   // 崩れる床: 足が離れると穴になる（穴には乗れないが、回転で上を通過はできる）
   crumble: {
     char: 'C', label: '崩れる床', group: 'crumble',
@@ -282,7 +287,7 @@ const GIMMICKS = {
   },
 };
 // 足が乗った／離れたときに効果を処理する順番
-const GIMMICK_ORDER = ['item', 'paint', 'switch', 'crumble', 'goal', 'goalA', 'goalB', 'doorClosed', 'doorOpen'];
+const GIMMICK_ORDER = ['item', 'slide', 'paint', 'switch', 'crumble', 'goal', 'goalA', 'goalB', 'doorClosed', 'doorOpen'];
 
 const CHAR_TO_TERRAIN = {}, CHAR_TO_GIMMICK = {};
 for (const [k, t] of Object.entries(TERRAINS)) CHAR_TO_TERRAIN[t.char] = k;
@@ -531,6 +536,15 @@ const STAGES = [
     '#O...G#',
     '#######',
   ]},
+  { name: 'ずらす', map: [
+    '########',
+    '#....MR#',
+    '#......#',
+    '#......#',
+    '#......#',
+    '#AB....#',
+    '########',
+  ]},
 ];
 
 /* =========================================================
@@ -547,7 +561,7 @@ function tokenizeStage(rows) {
 function parseStage(stage) {
   const { grid, w, h } = tokenizeStage(stage.map);
   let a = null, b = null;
-  const crumbleBit = new Map(), paintBit = new Map(), itemBit = new Map();
+  const crumbleBit = new Map(), paintBit = new Map(), itemBit = new Map(), slideBit = new Map();
   const goals = { A: { own: false, shared: false }, B: { own: false, shared: false } };
   const cells = [];
   for (let y = 0; y < h; y++) {
@@ -562,6 +576,7 @@ function parseStage(stage) {
         if (m === 'crumble') crumbleBit.set(idx, crumbleBit.size);
         if (m === 'paint') paintBit.set(idx, paintBit.size);
         if (m === 'item') itemBit.set(idx, itemBit.size);
+        if (m === 'slide') slideBit.set(idx, slideBit.size);
         if (GIMMICKS[m].group === 'goal') {
           cell.goal = m;
           const gf = GIMMICKS[m].goalFor;
@@ -577,9 +592,10 @@ function parseStage(stage) {
   if (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) !== 1) throw new Error('A と B は上下左右に隣接している必要があります');
   const hasFootGoal = goals.A.own || goals.A.shared || goals.B.own || goals.B.shared;
   if (!hasFootGoal && paintBit.size === 0) throw new Error('ゴール（G / R / U / P）がありません');
-  const level = { w, h, cells, start: null, goals, hasFootGoal, crumbleBit, paintBit, itemBit };
+  const level = { w, h, cells, start: null, goals, hasFootGoal, crumbleBit, paintBit, itemBit, slideBit };
   // 初期状態（最初に乗っているマスの塗りは反映する）
-  const s0 = { a, b, door: 0, broken: '0'.repeat(crumbleBit.size), painted: '0'.repeat(paintBit.size), items: '0'.repeat(itemBit.size) };
+  const s0 = { a, b, door: 0, broken: '0'.repeat(crumbleBit.size), painted: '0'.repeat(paintBit.size), items: '0'.repeat(itemBit.size),
+    sitems: '0'.repeat(slideBit.size), slides: 0 };
   for (const p of [a, b]) {
     const idx = p.y * w + p.x;
     if (paintBit.has(idx)) s0.painted = setBit(s0.painted, paintBit.get(idx));
@@ -591,7 +607,8 @@ function parseStage(stage) {
 
 /* =========================================================
  * ルール（盤面とは独立した純粋関数。ソルバーとゲームで共用）
- * 状態 s = { a:{x,y}, b:{x,y}, door:0|1, broken:'0101', painted:'0011', items:'01' }
+ * 状態 s = { a:{x,y}, b:{x,y}, door:0|1, broken:'0101', painted:'0011', items:'01',
+ *          sitems:'01'（取ったスライドアイテム）, slides: 持っているスライドの数 }
  * ========================================================= */
 function cellAt(level, x, y) {
   if (x < 0 || y < 0 || x >= level.w || y >= level.h) return null;
@@ -610,6 +627,7 @@ function cellView(level, s, x, y) {
     crumble: has('crumble'), broken,
     door: c.door, doorClosed: !!c.door && !doorOpen,
     item: has('item') && s.items[level.itemBit.get(idx)] !== '1',
+    slideItem: has('slide') && s.sitems[level.slideBit.get(idx)] !== '1',
     paint: has('paint'), painted: has('paint') && s.painted[level.paintBit.get(idx)] === '1',
     switch: has('switch'), goal: c.goal,
   };
@@ -634,23 +652,37 @@ function canPassEdge(level, s, x, y, fx, fy) {
 }
 
 function cloneState(s) {
-  return { a: { ...s.a }, b: { ...s.b }, door: s.door, broken: s.broken, painted: s.painted, items: s.items };
+  return { a: { ...s.a }, b: { ...s.b }, door: s.door, broken: s.broken, painted: s.painted, items: s.items, sitems: s.sitems, slides: s.slides };
 }
 function stateKey(s) {
-  return `${s.a.x},${s.a.y}|${s.b.x},${s.b.y}|${s.door}|${s.broken}|${s.painted}|${s.items}`;
+  return `${s.a.x},${s.a.y}|${s.b.x},${s.b.y}|${s.door}|${s.broken}|${s.painted}|${s.items}|${s.sitems}|${s.slides}`;
 }
 
 /** 動かした結果の状態を返す（マスの効果を反映）。成立しなければ null */
 function applyMove(level, s, mv) {
   const ns = cloneState(s);
-  const from = s[mv.mover];
-  ns[mv.mover] = { ...mv.to };
-  const fromCell = cellAt(level, from.x, from.y);
-  for (const m of fromCell.mods) if (GIMMICKS[m].onLeave) GIMMICKS[m].onLeave(ns, level, from.y * level.w + from.x);
-  const v = cellView(level, s, mv.to.x, mv.to.y);
-  for (const m of v.cell.mods) {
-    if (m === 'item' && !v.item) continue; // 取られたアイテムは何もしない
-    if (GIMMICKS[m].onEnter) GIMMICKS[m].onEnter(ns, level, v.idx);
+  if (mv.kind === 'slide') {
+    ns.a = { x: s.a.x + mv.d.x, y: s.a.y + mv.d.y };
+    ns.b = { x: s.b.x + mv.d.x, y: s.b.y + mv.d.y };
+    ns.slides--;
+  } else {
+    ns[mv.mover] = { ...mv.to };
+  }
+  // 足がいなくなったマスは「離れた」、新しく足が来たマスは「乗った」として効果を起こす
+  const same = (p, q) => p.x === q.x && p.y === q.y;
+  const before = [s.a, s.b], after = [ns.a, ns.b];
+  for (const p of before) {
+    if (after.some(q => same(p, q))) continue;
+    for (const m of cellAt(level, p.x, p.y).mods) if (GIMMICKS[m].onLeave) GIMMICKS[m].onLeave(ns, level, p.y * level.w + p.x);
+  }
+  for (const p of after) {
+    if (before.some(q => same(p, q))) continue;
+    const v = cellView(level, s, p.x, p.y);
+    for (const m of v.cell.mods) {
+      if (m === 'item' && !v.item) continue;       // 取られたアイテムは何もしない
+      if (m === 'slide' && !v.slideItem) continue;
+      if (GIMMICKS[m].onEnter) GIMMICKS[m].onEnter(ns, level, v.idx);
+    }
   }
   // 効果のあと（扉が閉じた等）でも両足が立てること
   if (!canStand(level, ns, ns.a.x, ns.a.y) || !canStand(level, ns, ns.b.x, ns.b.y)) return null;
@@ -663,6 +695,7 @@ function applyMove(level, s, mv) {
  * 戻り値: [{ pivot, mover, to, dir(+1 時計回り / -1 反時計回り), angle(π/2 か π/4), kind, next }]
  *   kind: 'turn90' 通常の90°回転 / 'stop45' 45°回ってアイテムを取り斜めになる
  *         / 'turn45' 斜めの姿勢から45°回ってアイテムを取り縦横に戻る / 'turnDiag' 斜めの姿勢のまま90°回る
+ *         / 'slide' スライドアイテムを使って形のまま1マス動く（mover: 'both', d: 向き, targets: 新しく入るマス）
  * アイテムのマスには45°回って入るときだけ入れる（90°回転では入れない）。
  */
 function getMoves(level, s) {
@@ -716,6 +749,16 @@ function getMoves(level, s) {
           push({ pivot, mover, to, dir, angle: Math.PI / 2, kind: 'turnDiag' });
         }
       }
+    }
+  }
+  // スライド（スライドアイテムを持っているとき）。45°アイテムのマスには入れない
+  if (s.slides > 0) {
+    for (const d of [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]) {
+      const na = { x: s.a.x + d.x, y: s.a.y + d.y }, nb = { x: s.b.x + d.x, y: s.b.y + d.y };
+      if (!canStand(level, s, na.x, na.y) || !canStand(level, s, nb.x, nb.y)) continue;
+      const targets = [na, nb].filter(p => !(p.x === s.a.x && p.y === s.a.y) && !(p.x === s.b.x && p.y === s.b.y));
+      if (targets.some(p => isItem(level, s, p.x, p.y))) continue;
+      push({ mover: 'both', kind: 'slide', d, to: targets[0], targets });
     }
   }
   return result;
@@ -849,6 +892,7 @@ const COLORS = {
   footA: '#ef476f',
   footB: '#3a86ff',
   stop: '#2ec4b6',
+  slide: '#f4a340',
   switchCol: '#b388ff',
   paint: '#8bd17c',
   crumble: '#5a4a3a',
@@ -872,7 +916,7 @@ function staticView(terrain, mods = []) {
   const door = mods.find(m => GIMMICKS[m].group === 'door') || null;
   return {
     terrain, crumble: has('crumble'), broken: false, door, doorClosed: door === 'doorClosed',
-    item: has('item'), paint: has('paint'), painted: false, switch: has('switch'),
+    item: has('item'), slideItem: has('slide'), paint: has('paint'), painted: false, switch: has('switch'),
     goal: mods.find(m => GIMMICKS[m].group === 'goal') || null,
   };
 }
@@ -996,6 +1040,23 @@ function drawCell(g, v, px, py, c, opt = {}) {
     g.moveTo(cx, cy - r); g.lineTo(cx + r * 0.45, cy - r * 0.15); g.lineTo(cx - r * 0.45, cy - r * 0.15);
     g.closePath(); g.fill();
   }
+  if (v.slideItem) {
+    // 上下左右の矢印
+    const cx = px + c / 2, cy = py + c / 2, L = c * 0.3, hw = c * 0.09;
+    g.save();
+    g.strokeStyle = COLORS.slide; g.fillStyle = COLORS.slide;
+    g.lineWidth = Math.max(2, c * 0.06); g.lineCap = 'round';
+    g.beginPath(); g.moveTo(cx - L + hw, cy); g.lineTo(cx + L - hw, cy); g.moveTo(cx, cy - L + hw); g.lineTo(cx, cy + L - hw); g.stroke();
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const tx = cx + dx * L, ty = cy + dy * L;
+      g.beginPath();
+      g.moveTo(tx, ty);
+      g.lineTo(tx - dx * hw * 1.6 - dy * hw, ty - dy * hw * 1.6 - dx * hw);
+      g.lineTo(tx - dx * hw * 1.6 + dy * hw, ty - dy * hw * 1.6 + dx * hw);
+      g.closePath(); g.fill();
+    }
+    g.restore();
+  }
   if (v.door) {
     g.save();
     if (v.doorClosed) {
@@ -1111,6 +1172,8 @@ function updateHud() {
     sel.value = game.stageIndex;
   }
   el('moveCount').textContent = game.moves;
+  const sc = game.state ? game.state.slides : 0;
+  el('slideCount').innerHTML = sc > 0 ? `<span style="color:${COLORS.slide};font-size:20px;margin-right:12px;">✥${sc > 1 ? sc : ''}</span>` : '';
   el('btnUndo').disabled = game.history.length === 0 || game.cleared;
   el('btnReset').disabled = game.history.length === 0 && !game.cleared;
   el('btnPrev').textContent = game.testing ? 'エディタへ' : '◀ 前';
@@ -1174,9 +1237,11 @@ function isNearOpen(level, x, y) {
 function groupMovesByCell(moves) {
   const map = new Map();
   for (const mv of moves) {
-    const k = mv.to.x + ',' + mv.to.y;
-    if (!map.has(k)) map.set(k, []);
-    map.get(k).push(mv);
+    for (const t of (mv.targets || [mv.to])) {
+      const k = t.x + ',' + t.y;
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(mv);
+    }
   }
   return map;
 }
@@ -1201,6 +1266,12 @@ function draw(now) {
     const t = Math.min(1, ((now || performance.now()) - game.anim.start) / CONFIG.ANIM_MS);
     const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad
     const { move, from } = game.anim;
+    if (move.kind === 'slide') {
+      const lerp = (p, q) => ({ x: p.x + (q.x - p.x) * e, y: p.y + (q.y - p.y) * e });
+      posA = lerp(cellCenter(from.a.x, from.a.y), cellCenter(move.next.a.x, move.next.a.y));
+      posB = lerp(cellCenter(from.b.x, from.b.y), cellCenter(move.next.b.x, move.next.b.y));
+      animating = t < 1;
+    } else {
     const p = cellCenter(from[move.pivot].x, from[move.pivot].y);
     const m0 = cellCenter(from[move.mover].x, from[move.mover].y);
     const m1 = cellCenter(move.to.x, move.to.y);
@@ -1211,18 +1282,20 @@ function draw(now) {
     const mp = { x: p.x + Math.cos(ang) * rad, y: p.y + Math.sin(ang) * rad };
     if (move.mover === 'a') posA = mp; else posB = mp;
     animating = t < 1;
+    }
   }
 
   // 移動候補のハイライト（リングの色 = 動く足）
   if (!game.anim && !game.cleared) {
-    for (const [, group] of groupMovesByCell(getMoves(level, s))) {
-      const to = group[0].to;
+    for (const [key, group] of groupMovesByCell(getMoves(level, s))) {
+      const [tx, ty] = key.split(',').map(Number);
+      const to = { x: tx, y: ty };
       const cc = cellCenter(to.x, to.y);
       g.fillStyle = COLORS.hint;
       roundRect(g, to.x * c + 3, to.y * c + 3, c - 6, c - 6, c * 0.14);
       g.fill();
       group.forEach((mv, i) => {
-        g.strokeStyle = mv.mover === 'a' ? 'rgba(239,71,111,0.75)' : 'rgba(58,134,255,0.75)';
+        g.strokeStyle = mv.mover === 'a' ? 'rgba(239,71,111,0.75)' : mv.mover === 'b' ? 'rgba(58,134,255,0.75)' : 'rgba(244,163,64,0.85)';
         g.lineWidth = 2;
         const r = c * (0.14 + i * 0.08);
         g.beginPath();
@@ -1259,7 +1332,9 @@ function showChooser(group, x, y) {
   for (const mv of group) {
     const b = document.createElement('button');
     b.className = 'footBtn';
-    b.style.background = mv.mover === 'a' ? COLORS.footA : COLORS.footB;
+    b.style.background = mv.mover === 'a' ? COLORS.footA : mv.mover === 'b' ? COLORS.footB
+      : `linear-gradient(90deg, ${COLORS.footA} 50%, ${COLORS.footB} 50%)`; // 両足ごと動く（スライド）
+    if (mv.mover === 'both') b.style.border = `3px solid ${COLORS.slide}`;
     b.addEventListener('click', e => { e.stopPropagation(); tryMove(mv); });
     chooser.appendChild(b);
   }
@@ -1280,7 +1355,7 @@ canvas.addEventListener('pointerdown', ev => {
   const rect = canvas.getBoundingClientRect();
   const x = Math.floor((ev.clientX - rect.left) / game.layout.cell);
   const y = Math.floor((ev.clientY - rect.top) / game.layout.cell);
-  const group = getMoves(game.level, game.state).filter(m => m.to.x === x && m.to.y === y);
+  const group = getMoves(game.level, game.state).filter(m => (m.targets || [m.to]).some(t => t.x === x && t.y === y));
   if (group.length === 1) tryMove(group[0]);
   else if (group.length > 1) showChooser(group, x, y);
   else hideChooser();
@@ -1326,6 +1401,7 @@ const PALETTE = [
   'wall', 'floor', 'footA', 'footB', 'goal', 'goalA', 'goalB',
   'triTL', 'triTR', 'triBL', 'triBR', 'item', 'crumble', 'paint',
   'peakU', 'peakD', 'peakR', 'peakL', 'switch', 'doorClosed', 'doorOpen',
+  'slide',
 ];
 const newCell = (terrain = 'floor') => ({ terrain, mods: [] });
 
