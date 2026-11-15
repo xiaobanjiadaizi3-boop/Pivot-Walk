@@ -161,7 +161,7 @@
     <canvas id="edCanvas"></canvas>
   </div>
   <div id="palette"></div>
-  <div id="edStatus">マスをタップ（なぞる）して配置します</div>
+  <div id="edStatus">マスをタップ（なぞる）して配置。ギミックは床に重ねられ、同じものをもう一度置くと外れます</div>
   <div class="edActions">
     <button id="btnEdTest" class="primary">テスト</button>
     <button id="btnEdCheck">検証</button>
@@ -204,96 +204,145 @@ const CONFIG = {
 };
 
 /* =========================================================
- * マスの種類（タイル定義）
+ * マスの定義
+ * 1マス = 「地形」1つ ＋ その上に重ねる「ギミック」0個以上。
+ *
+ * 地形 TERRAINS（1マスに1つ）
  *   char      : ステージ文字列での文字
  *   label     : エディタでの名前
  *   standable : 足を乗せられるか
- *   passable  : 回転中に足が通過できるか（斜めのマス C の判定に使う）
+ *   passable  : 回転中に足が通過できるか（通過マス C の判定に使う）
  *               true / false、または関数 (dx, dy) => boolean
  *               (dx, dy) は「軸の足 → 通過マス C」の向き（各成分 ±1）
- *   goalFor   : そのマスをゴールとして使える足（'A' / 'B'）
  *   passEdge  : 斜めの姿勢のまま90°回るとき、足がマスの「辺ぞい」をかすめて通れるか。
- *               関数 (fx, fy) => boolean。(fx, fy) はかすめる辺の向き（軸から遠い側）。
- *               省略時は passable が true なら通れる
- *   item      : 45°アイテム。取ると消える。縦横の姿勢と斜めの姿勢を切り替えるときに必要
+ *               関数 (fx, fy) => boolean。(fx, fy) はかすめる辺の向き（軸から遠い側）
+ *
+ * ギミック GIMMICKS（床の上に重ねられる。group が同じものは1マスに1つまで）
+ *   goalFor   : そのマスをゴールとして使える足（'A' / 'B'）
  *   onEnter / onLeave : 足が乗った／離れたときの効果。
  *               (s, level, idx) を受け取り、状態 s（コピー済み）を書き換える
- *   draw      : 描画方法のキー
  * 新しいギミックはここにエントリを足し、必要なら onEnter / onLeave を書く。
  * ========================================================= */
 
 /** 三角形の地形。埋まっている角の向き (sx, sy)。足は乗れない。
  *  回転中の足は軸の足に近い側の角をかすめるので、埋まった角が軸と反対を向くときだけ通れる。 */
-function triangleTile(char, sx, sy, label) {
+function triangleTerrain(char, sx, sy, label) {
   return {
-    char, label, standable: false, goalFor: [], draw: 'triangle', solid: { x: sx, y: sy },
+    char, label, standable: false, draw: 'triangle', solid: { x: sx, y: sy },
     passable: (dx, dy) => dx === sx && dy === sy,
-    // 埋まった直角三角形の2辺（(sx,0) と (0,sy) の辺）ぞいは通れない
     // 斜めの姿勢のまま回るときは、どの向きでも斜めの面か直角の角にぶつかるので通れない
     passEdge: () => false,
   };
 }
 /** 山形の三角形。底辺がマスの1辺 (ex, ey) にあり、頂点がマスの中心。足は乗れない。
- *  回転中の足は、底辺と反対側の2つの角のどちらをかすめる場合も通れる（直角三角形より通れる向きが多い）。 */
-function peakTile(char, ex, ey, label) {
+ *  回転中の足は、底辺と反対側の2つの角のどちらをかすめる場合も通れる。 */
+function peakTerrain(char, ex, ey, label) {
   return {
-    char, label, standable: false, goalFor: [], draw: 'peak', base: { x: ex, y: ey },
-    // 軸に近い角が底辺の反対側にあれば通れる
+    char, label, standable: false, draw: 'peak', base: { x: ex, y: ey },
     passable: (dx, dy) => dx * ex + dy * ey > 0,
-    // 辺ぞいは、底辺の反対側の辺だけ通れる
     passEdge: (fx, fy) => fx === -ex && fy === -ey,
   };
 }
 
-const TILE_TYPES = {
-  wall:  { char: '#', label: '壁',   standable: false, passable: false, goalFor: [],         draw: 'wall' },
-  floor: { char: '.', label: '床',   standable: true,  passable: true,  goalFor: [],         draw: 'floor' },
-  goal:  { char: 'G', label: 'ゴール', standable: true,  passable: true,  goalFor: ['A', 'B'], draw: 'goal' },
-  goalA: { char: 'R', label: 'A専用', standable: true,  passable: true,  goalFor: ['A'],      draw: 'goalA' },
-  goalB: { char: 'U', label: 'B専用', standable: true,  passable: true,  goalFor: ['B'],      draw: 'goalB' },
-  triTL: triangleTile('r', -1, -1, '三角◤'),
-  triTR: triangleTile('7',  1, -1, '三角◥'),
-  triBL: triangleTile('L', -1,  1, '三角◣'),
-  triBR: triangleTile('J',  1,  1, '三角◢'),
-  peakU: peakTile('^',  0,  1, '山 ▲'), // 底辺が下、上向き
-  peakD: peakTile('v',  0, -1, '山 ▼'),
-  peakR: peakTile('>', -1,  0, '山 ▶'),
-  peakL: peakTile('<',  1,  0, '山 ◀'),
+const TERRAINS = {
+  wall:  { char: '#', label: '壁', standable: false, passable: false, passEdge: () => false, draw: 'wall' },
+  floor: { char: '.', label: '床', standable: true,  passable: true,  passEdge: () => true,  draw: 'floor' },
+  triTL: triangleTerrain('r', -1, -1, '三角◤'),
+  triTR: triangleTerrain('7',  1, -1, '三角◥'),
+  triBL: triangleTerrain('L', -1,  1, '三角◣'),
+  triBR: triangleTerrain('J',  1,  1, '三角◢'),
+  peakU: peakTerrain('^',  0,  1, '山 ▲'), // 底辺が下、上向き
+  peakD: peakTerrain('v',  0, -1, '山 ▼'),
+  peakR: peakTerrain('>', -1,  0, '山 ▶'),
+  peakL: peakTerrain('<',  1,  0, '山 ◀'),
+};
+
+const GIMMICKS = {
+  goal:  { char: 'G', label: 'ゴール', group: 'goal', goalFor: ['A', 'B'] },
+  goalA: { char: 'R', label: 'A専用',  group: 'goal', goalFor: ['A'] },
+  goalB: { char: 'U', label: 'B専用',  group: 'goal', goalFor: ['B'] },
   // 45°アイテム: 足が45°回ってこのマスに入ると取れる（消える）。取るたびに縦横⇔斜めの姿勢が切り替わる
-  stop:  {
-    char: 'O', label: '45°アイテム', standable: true, passable: true, goalFor: [], draw: 'item', item: true,
+  item: {
+    char: 'O', label: '45°アイテム', group: 'item',
     onEnter(s, level, idx) { s.items = setBit(s.items, level.itemBit.get(idx)); },
   },
+  // 崩れる床: 足が離れると穴になる（穴には乗れないが、回転で上を通過はできる）
   crumble: {
-    char: 'C', label: '崩れる床', standable: true, passable: true, goalFor: [], draw: 'crumble',
+    char: 'C', label: '崩れる床', group: 'crumble',
     onLeave(s, level, idx) { s.broken = setBit(s.broken, level.crumbleBit.get(idx)); },
   },
-  hole:  { char: null, label: '穴', standable: false, passable: true, goalFor: [], draw: 'hole' }, // 崩れた後
-  switch: {
-    char: 'S', label: 'スイッチ', standable: true, passable: true, goalFor: [], draw: 'switch',
-    onEnter(s) { s.door ^= 1; },
-  },
-  doorClosed: { char: 'D', label: '扉(閉)', standable: false, passable: false, goalFor: [], draw: 'doorClosed' },
-  doorOpen:   { char: 'd', label: '扉(開)', standable: true,  passable: true,  goalFor: [], draw: 'doorOpen' },
+  // スイッチ: 足が乗るたびにすべての扉が開閉する
+  switch: { char: 'S', label: 'スイッチ', group: 'switch', onEnter(s) { s.door ^= 1; } },
+  doorClosed: { char: 'D', label: '扉(閉)', group: 'door' },
+  doorOpen:   { char: 'd', label: '扉(開)', group: 'door' },
+  // 塗りマス: すべて踏むとクリア条件を満たす
   paint: {
-    char: 'P', label: '塗りマス', standable: true, passable: true, goalFor: [], draw: 'paint',
+    char: 'P', label: '塗りマス', group: 'paint',
     onEnter(s, level, idx) { s.painted = setBit(s.painted, level.paintBit.get(idx)); },
   },
 };
+// 足が乗った／離れたときに効果を処理する順番
+const GIMMICK_ORDER = ['item', 'paint', 'switch', 'crumble', 'goal', 'goalA', 'goalB', 'doorClosed', 'doorOpen'];
 
-// ステージ文字 → タイル種別
-const CHAR_TO_TILE = {};
-for (const [key, t] of Object.entries(TILE_TYPES)) if (t.char) CHAR_TO_TILE[t.char] = key;
-CHAR_TO_TILE['A'] = 'floor'; // 足Aの初期位置は床扱い
-CHAR_TO_TILE['B'] = 'floor'; // 足Bの初期位置は床扱い
+const CHAR_TO_TERRAIN = {}, CHAR_TO_GIMMICK = {};
+for (const [k, t] of Object.entries(TERRAINS)) CHAR_TO_TERRAIN[t.char] = k;
+for (const [k, g] of Object.entries(GIMMICKS)) CHAR_TO_GIMMICK[g.char] = k;
 
 function setBit(str, i) { return str.slice(0, i) + '1' + str.slice(i + 1); }
 
+/**
+ * マップの1行を、マスごとの記述に分ける。
+ * 1文字 = 1マス。[ ] でくくると1マスに複数書ける（例: [CG] = 崩れる床＋ゴール、[AP] = 足Aの初期位置＋塗りマス、[7] でも可）。
+ * 戻り値: [{ terrain, mods: [ギミックキー...], a: bool, b: bool }]
+ */
+function tokenizeRow(row, y) {
+  const cells = [];
+  for (let i = 0; i < row.length; i++) {
+    let chars;
+    if (row[i] === '[') {
+      const j = row.indexOf(']', i);
+      if (j < 0) throw new Error(`${y + 1}行目: ] がありません`);
+      chars = row.slice(i + 1, j);
+      i = j;
+    } else chars = row[i];
+    const cell = { terrain: null, mods: [], a: false, b: false };
+    for (const ch of chars) {
+      if (ch === 'A') cell.a = true;
+      else if (ch === 'B') cell.b = true;
+      else if (CHAR_TO_TERRAIN[ch]) {
+        if (cell.terrain) throw new Error(`${y + 1}行目: 1マスに地形が2つあります`);
+        cell.terrain = CHAR_TO_TERRAIN[ch];
+      } else if (CHAR_TO_GIMMICK[ch]) {
+        const k = CHAR_TO_GIMMICK[ch];
+        if (cell.mods.some(m => GIMMICKS[m].group === GIMMICKS[k].group)) throw new Error(`${y + 1}行目: 同じ種類のギミックが重なっています`);
+        cell.mods.push(k);
+      } else throw new Error(`未知のマス文字 "${ch}"（${y + 1}行目）`);
+    }
+    if (!cell.terrain) cell.terrain = 'floor';
+    if (cell.terrain !== 'floor' && (cell.mods.length || cell.a || cell.b)) throw new Error(`${y + 1}行目: ギミックや足は床の上にしか置けません`);
+    if (cell.a && cell.b) throw new Error(`${y + 1}行目: A と B が同じマスにあります`);
+    cells.push(cell);
+  }
+  return cells;
+}
+/** 1マス分の記述を文字列に戻す */
+function cellToText(cell) {
+  let t = (cell.a ? 'A' : '') + (cell.b ? 'B' : '') + cell.mods.map(m => GIMMICKS[m].char).join('');
+  if (cell.terrain !== 'floor') t = TERRAINS[cell.terrain].char + t;
+  if (t === '') return '.';
+  return t.length === 1 ? t : `[${t}]`;
+}
+
 /* =========================================================
  * ステージデータ
- *   #: 壁  .: 床  A/B: 足の初期位置
+ * 1文字 = 1マス。[ ] でくくると1マスにギミックを重ねられる（例: [CG] 崩れる床＋ゴール、[SP] スイッチ＋塗り）
+ * 地形:
+ *   #: 壁  .: 床
+ * ギミック（床の上に置く。重ねられる）:
+ *   A/B: 足の初期位置
  *   G: ゴール（どちらの足でも可。G があるときは両足とも G に乗る）
  *   R: 足A専用ゴール（R だけなら「足Aが R に乗ればクリア」）  U: 足B専用ゴール
+ * （以下、三角形と山形は地形）
  *   三角形（足は乗れない。埋まっている角の向きで通過の可否が変わる）
  *     r: ◤ 左上   7: ◥ 右上   L: ◣ 左下   J: ◢ 右下
  *   山形の三角形（足は乗れない。頂点側の2つの角のどちらからでもかすめて通れる）
@@ -487,42 +536,50 @@ const STAGES = [
 /* =========================================================
  * ステージの読み込み
  * ========================================================= */
-function parseStage(stage) {
-  const rows = stage.map;
+function tokenizeStage(rows) {
   if (!rows || !rows.length) throw new Error('マップが空です');
-  const h = rows.length;
-  const w = Math.max(...rows.map(r => r.length));
-  const tiles = [];
+  const grid = rows.map((r, y) => tokenizeRow(r, y));
+  const w = Math.max(...grid.map(r => r.length));
+  for (const r of grid) while (r.length < w) r.push({ terrain: 'wall', mods: [], a: false, b: false });
+  return { grid, w, h: grid.length };
+}
+
+function parseStage(stage) {
+  const { grid, w, h } = tokenizeStage(stage.map);
   let a = null, b = null;
   const crumbleBit = new Map(), paintBit = new Map(), itemBit = new Map();
+  const goals = { A: { own: false, shared: false }, B: { own: false, shared: false } };
+  const cells = [];
   for (let y = 0; y < h; y++) {
     const line = [];
     for (let x = 0; x < w; x++) {
-      const ch = rows[y][x] || '#';
-      const tile = CHAR_TO_TILE[ch];
-      if (!tile) throw new Error(`未知のマス文字 "${ch}" (${x},${y})`);
-      line.push(tile);
-      if (ch === 'A') { if (a) throw new Error('A が2つあります'); a = { x, y }; }
-      if (ch === 'B') { if (b) throw new Error('B が2つあります'); b = { x, y }; }
-      if (tile === 'crumble') crumbleBit.set(y * w + x, crumbleBit.size);
-      if (tile === 'paint') paintBit.set(y * w + x, paintBit.size);
-      if (tile === 'stop') itemBit.set(y * w + x, itemBit.size);
+      const t = grid[y][x];
+      if (t.a) { if (a) throw new Error('A が2つあります'); a = { x, y }; }
+      if (t.b) { if (b) throw new Error('B が2つあります'); b = { x, y }; }
+      const idx = y * w + x;
+      const cell = { terrain: t.terrain, mods: t.mods.slice().sort((p, q) => GIMMICK_ORDER.indexOf(p) - GIMMICK_ORDER.indexOf(q)), goal: null, door: null };
+      for (const m of cell.mods) {
+        if (m === 'crumble') crumbleBit.set(idx, crumbleBit.size);
+        if (m === 'paint') paintBit.set(idx, paintBit.size);
+        if (m === 'item') itemBit.set(idx, itemBit.size);
+        if (GIMMICKS[m].group === 'goal') {
+          cell.goal = m;
+          const gf = GIMMICKS[m].goalFor;
+          if (gf.length === 2) goals.A.shared = goals.B.shared = true; else goals[gf[0]].own = true;
+        }
+        if (GIMMICKS[m].group === 'door') cell.door = m;
+      }
+      line.push(cell);
     }
-    tiles.push(line);
+    cells.push(line);
   }
   if (!a || !b) throw new Error('A と B の初期位置が必要です');
   if (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) !== 1) throw new Error('A と B は上下左右に隣接している必要があります');
-  const goals = { A: { own: false, shared: false }, B: { own: false, shared: false } };
-  for (const line of tiles) for (const key of line) {
-    const gf = TILE_TYPES[key].goalFor;
-    if (gf.length === 2) goals.A.shared = goals.B.shared = true;
-    else if (gf.length === 1) goals[gf[0]].own = true;
-  }
   const hasFootGoal = goals.A.own || goals.A.shared || goals.B.own || goals.B.shared;
   if (!hasFootGoal && paintBit.size === 0) throw new Error('ゴール（G / R / U / P）がありません');
-  const level = { w, h, tiles, start: null, goals, hasFootGoal, crumbleBit, paintBit, itemBit };
-  // 初期状態（最初に乗っているマスの効果も反映する）
-  let s0 = { a, b, door: 0, broken: '0'.repeat(crumbleBit.size), painted: '0'.repeat(paintBit.size), items: '0'.repeat(itemBit.size) };
+  const level = { w, h, cells, start: null, goals, hasFootGoal, crumbleBit, paintBit, itemBit };
+  // 初期状態（最初に乗っているマスの塗りは反映する）
+  const s0 = { a, b, door: 0, broken: '0'.repeat(crumbleBit.size), painted: '0'.repeat(paintBit.size), items: '0'.repeat(itemBit.size) };
   for (const p of [a, b]) {
     const idx = p.y * w + p.x;
     if (paintBit.has(idx)) s0.painted = setBit(s0.painted, paintBit.get(idx));
@@ -534,38 +591,46 @@ function parseStage(stage) {
 
 /* =========================================================
  * ルール（盤面とは独立した純粋関数。ソルバーとゲームで共用）
- * 状態 s = { a:{x,y}, b:{x,y}, door:0|1, broken:'0101', painted:'0011' }
+ * 状態 s = { a:{x,y}, b:{x,y}, door:0|1, broken:'0101', painted:'0011', items:'01' }
  * ========================================================= */
-function baseKey(level, x, y) {
+function cellAt(level, x, y) {
   if (x < 0 || y < 0 || x >= level.w || y >= level.h) return null;
-  return level.tiles[y][x];
+  return level.cells[y][x];
 }
-/** 状態を反映した実際のマス種別キー（崩れた床・扉の開閉） */
-function effKey(level, s, x, y) {
-  const k = baseKey(level, x, y);
-  if (k === 'crumble' && s.broken[level.crumbleBit.get(y * level.w + x)] === '1') return 'hole';
-  if (k === 'stop' && s.items[level.itemBit.get(y * level.w + x)] === '1') return 'floor';
-  if (k === 'doorClosed' || k === 'doorOpen') {
-    const open = (k === 'doorOpen') !== (s.door === 1);
-    return open ? 'doorOpen' : 'doorClosed';
-  }
-  return k;
+/** 状態を反映したマスの様子 */
+function cellView(level, s, x, y) {
+  const c = cellAt(level, x, y);
+  if (!c) return null;
+  const idx = y * level.w + x;
+  const has = m => c.mods.includes(m);
+  const broken = has('crumble') && s.broken[level.crumbleBit.get(idx)] === '1';
+  const doorOpen = c.door ? ((c.door === 'doorOpen') !== (s.door === 1)) : true;
+  return {
+    terrain: c.terrain, cell: c, idx,
+    crumble: has('crumble'), broken,
+    door: c.door, doorClosed: !!c.door && !doorOpen,
+    item: has('item') && s.items[level.itemBit.get(idx)] !== '1',
+    paint: has('paint'), painted: has('paint') && s.painted[level.paintBit.get(idx)] === '1',
+    switch: has('switch'), goal: c.goal,
+  };
 }
-function effTile(level, s, x, y) { const k = effKey(level, s, x, y); return k ? TILE_TYPES[k] : null; }
-function canStand(level, s, x, y) { const t = effTile(level, s, x, y); return !!t && t.standable; }
+function canStand(level, s, x, y) {
+  const v = cellView(level, s, x, y);
+  return !!v && TERRAINS[v.terrain].standable && !v.broken && !v.doorClosed;
+}
 function canPass(level, s, x, y, dx, dy) {
-  const t = effTile(level, s, x, y);
-  if (!t) return false;
-  return typeof t.passable === 'function' ? t.passable(dx, dy) : t.passable;
+  const v = cellView(level, s, x, y);
+  if (!v || v.doorClosed) return false;
+  const p = TERRAINS[v.terrain].passable;
+  return typeof p === 'function' ? p(dx, dy) : p;
 }
 /** まだ取られていない45°アイテムがあるか */
-function isItem(level, s, x, y) { const t = effTile(level, s, x, y); return !!t && !!t.item; }
+function isItem(level, s, x, y) { const v = cellView(level, s, x, y); return !!v && v.item && canStand(level, s, x, y); }
 /** 斜めの姿勢で90°回るとき、途中のマスの辺ぞい（向き fx, fy）を通れるか */
 function canPassEdge(level, s, x, y, fx, fy) {
-  const t = effTile(level, s, x, y);
-  if (!t) return false;
-  if (t.passEdge) return t.passEdge(fx, fy);
-  return t.passable === true;
+  const v = cellView(level, s, x, y);
+  if (!v || v.doorClosed) return false;
+  return TERRAINS[v.terrain].passEdge(fx, fy);
 }
 
 function cloneState(s) {
@@ -579,12 +644,14 @@ function stateKey(s) {
 function applyMove(level, s, mv) {
   const ns = cloneState(s);
   const from = s[mv.mover];
-  const fromKey = effKey(level, s, from.x, from.y);
   ns[mv.mover] = { ...mv.to };
-  const leave = TILE_TYPES[fromKey].onLeave;
-  if (leave) leave(ns, level, from.y * level.w + from.x);
-  const toTile = effTile(level, s, mv.to.x, mv.to.y);
-  if (toTile.onEnter) toTile.onEnter(ns, level, mv.to.y * level.w + mv.to.x);
+  const fromCell = cellAt(level, from.x, from.y);
+  for (const m of fromCell.mods) if (GIMMICKS[m].onLeave) GIMMICKS[m].onLeave(ns, level, from.y * level.w + from.x);
+  const v = cellView(level, s, mv.to.x, mv.to.y);
+  for (const m of v.cell.mods) {
+    if (m === 'item' && !v.item) continue; // 取られたアイテムは何もしない
+    if (GIMMICKS[m].onEnter) GIMMICKS[m].onEnter(ns, level, v.idx);
+  }
   // 効果のあと（扉が閉じた等）でも両足が立てること
   if (!canStand(level, ns, ns.a.x, ns.a.y) || !canStand(level, ns, ns.b.x, ns.b.y)) return null;
   if (ns.a.x === ns.b.x && ns.a.y === ns.b.y) return null;
@@ -665,10 +732,11 @@ function isGoal(level, s) {
   return footOk(level, 'A', s.a) && footOk(level, 'B', s.b);
 }
 function footOk(level, foot, pos) {
-  const t = TILE_TYPES[baseKey(level, pos.x, pos.y)];
+  const c = cellAt(level, pos.x, pos.y);
+  const gf = c.goal ? GIMMICKS[c.goal].goalFor : [];
   const g = level.goals[foot];
-  if (g.own) return t.goalFor.length === 1 && t.goalFor[0] === foot;
-  if (g.shared) return t.goalFor.length === 2;
+  if (g.own) return gf.length === 1 && gf[0] === foot;
+  if (g.shared) return gf.length === 2;
   return true;
 }
 
@@ -798,22 +866,33 @@ function roundRect(g, x, y, w, h, r) {
   g.closePath();
 }
 
+/** 地形とギミックの一覧から、描画用のマスの様子を作る（エディタ・パレット用。状態は初期状態） */
+function staticView(terrain, mods = []) {
+  const has = m => mods.includes(m);
+  const door = mods.find(m => GIMMICKS[m].group === 'door') || null;
+  return {
+    terrain, crumble: has('crumble'), broken: false, door, doorClosed: door === 'doorClosed',
+    item: has('item'), paint: has('paint'), painted: false, switch: has('switch'),
+    goal: mods.find(m => GIMMICKS[m].group === 'goal') || null,
+  };
+}
+
 /**
- * 1マスを描く。
- * key: タイル種別キー（状態を反映済み）  px,py: 左上座標  c: マスの大きさ
- * opt: { painted:bool, wallMode:'auto'|'always', near:bool }
+ * 1マスを描く（地形 → ギミックの順に重ねる）。
+ * v: cellView / staticView の結果  px,py: 左上座標  c: マスの大きさ
+ * opt: { wallMode:'auto'|'always', near:bool }
  */
-function drawTileKey(g, key, px, py, c, opt = {}) {
-  const tile = TILE_TYPES[key];
-  const kind = tile.draw;
-  if (kind === 'wall') {
+function drawCell(g, v, px, py, c, opt = {}) {
+  const ter = TERRAINS[v.terrain];
+  if (ter.draw === 'wall') {
     if (opt.near || opt.wallMode === 'always') {
       g.fillStyle = COLORS.block;
       g.fillRect(px, py, c, c);
     }
     return;
   }
-  if (kind === 'hole') {
+  // 床
+  if (v.broken) {
     g.fillStyle = '#0b0c10';
     g.fillRect(px, py, c, c);
     g.strokeStyle = '#2a2e3a';
@@ -821,134 +900,122 @@ function drawTileKey(g, key, px, py, c, opt = {}) {
     g.lineWidth = 1;
     g.strokeRect(px + 2.5, py + 2.5, c - 5, c - 5);
     g.setLineDash([]);
-    return;
-  }
-  if (kind === 'doorClosed') {
-    g.fillStyle = COLORS.block;
+  } else {
+    g.fillStyle = v.crumble ? COLORS.crumble : COLORS.floor;
     g.fillRect(px, py, c, c);
-    g.strokeStyle = COLORS.switchCol;
-    g.lineWidth = Math.max(2, c * 0.07);
-    for (let i = 1; i <= 3; i++) {
-      const x = px + c * i / 4;
-      g.beginPath(); g.moveTo(x, py + c * 0.12); g.lineTo(x, py + c * 0.88); g.stroke();
-    }
+    g.strokeStyle = COLORS.floorLine;
+    g.lineWidth = 1;
+    g.strokeRect(px + 0.5, py + 0.5, c - 1, c - 1);
+  }
+  if (ter.draw === 'triangle') {
+    const sx = ter.solid.x, sy = ter.solid.y;
+    const cx = sx > 0 ? px + c : px, cy = sy > 0 ? py + c : py;
+    g.fillStyle = COLORS.block;
+    g.beginPath();
+    g.moveTo(cx, cy); g.lineTo(sx > 0 ? px : px + c, cy); g.lineTo(cx, sy > 0 ? py : py + c);
+    g.closePath(); g.fill();
+    g.strokeStyle = COLORS.slopeEdge;
+    g.lineWidth = Math.max(1.5, c * 0.04);
+    g.beginPath(); g.moveTo(sx > 0 ? px : px + c, cy); g.lineTo(cx, sy > 0 ? py : py + c); g.stroke();
     return;
   }
-  // 床ベース
-  g.fillStyle = kind === 'crumble' ? COLORS.crumble : COLORS.floor;
-  g.fillRect(px, py, c, c);
-  g.strokeStyle = COLORS.floorLine;
-  g.lineWidth = 1;
-  g.strokeRect(px + 0.5, py + 0.5, c - 1, c - 1);
-  const m = c * 0.16;
-  switch (kind) {
-    case 'triangle': {
-      const sx = tile.solid.x, sy = tile.solid.y;
-      const cx = sx > 0 ? px + c : px, cy = sy > 0 ? py + c : py;
-      g.fillStyle = COLORS.block;
-      g.beginPath();
-      g.moveTo(cx, cy);
-      g.lineTo(sx > 0 ? px : px + c, cy);
-      g.lineTo(cx, sy > 0 ? py : py + c);
-      g.closePath();
-      g.fill();
-      g.strokeStyle = COLORS.slopeEdge;
+  if (ter.draw === 'peak') {
+    // 山形の三角形（底辺 = マスの1辺、頂点 = マスの中心）
+    const { x: ex, y: ey } = ter.base;
+    const mx = px + c / 2, my = py + c / 2;
+    const tx = -ey, ty = ex;
+    const bx = mx + ex * c / 2, by = my + ey * c / 2;
+    const p1 = [bx + tx * c / 2, by + ty * c / 2], p2 = [bx - tx * c / 2, by - ty * c / 2];
+    g.fillStyle = COLORS.block;
+    g.beginPath(); g.moveTo(p1[0], p1[1]); g.lineTo(p2[0], p2[1]); g.lineTo(mx, my); g.closePath(); g.fill();
+    g.strokeStyle = COLORS.slopeEdge;
+    g.lineWidth = Math.max(1.5, c * 0.04);
+    g.beginPath(); g.moveTo(p1[0], p1[1]); g.lineTo(mx, my); g.lineTo(p2[0], p2[1]); g.stroke();
+    return;
+  }
+  // ---- ギミック（重ねて描く） ----
+  if (v.crumble && !v.broken) {
+    g.strokeStyle = 'rgba(0,0,0,0.45)';
+    g.lineWidth = Math.max(1, c * 0.035);
+    g.beginPath();
+    g.moveTo(px + c * 0.2, py + c * 0.25); g.lineTo(px + c * 0.45, py + c * 0.45);
+    g.lineTo(px + c * 0.4, py + c * 0.7); g.moveTo(px + c * 0.45, py + c * 0.45);
+    g.lineTo(px + c * 0.78, py + c * 0.4); g.moveTo(px + c * 0.6, py + c * 0.8);
+    g.lineTo(px + c * 0.7, py + c * 0.6);
+    g.stroke();
+  }
+  if (v.paint) {
+    g.save();
+    if (v.painted) {
+      g.fillStyle = COLORS.paint;
+      g.globalAlpha = 0.45;
+      g.fillRect(px + 2, py + 2, c - 4, c - 4);
+    } else {
+      g.strokeStyle = COLORS.paint;
       g.lineWidth = Math.max(1.5, c * 0.04);
-      g.beginPath();
-      g.moveTo(sx > 0 ? px : px + c, cy);
-      g.lineTo(cx, sy > 0 ? py : py + c);
-      g.stroke();
-      break;
+      g.setLineDash([c * 0.08, c * 0.08]);
+      g.strokeRect(px + c * 0.07, py + c * 0.07, c * 0.86, c * 0.86);
     }
-    case 'peak': {
-      // 山形の三角形（底辺 = マスの1辺、頂点 = マスの中心）
-      const { x: ex, y: ey } = tile.base;
-      const mx = px + c / 2, my = py + c / 2;
-      const tx = -ey, ty = ex;                          // 底辺に沿う向き
-      const bx = mx + ex * c / 2, by = my + ey * c / 2; // 底辺の中点
-      const p1 = [bx + tx * c / 2, by + ty * c / 2], p2 = [bx - tx * c / 2, by - ty * c / 2];
-      g.fillStyle = COLORS.block;
-      g.beginPath();
-      g.moveTo(p1[0], p1[1]); g.lineTo(p2[0], p2[1]); g.lineTo(mx, my);
-      g.closePath();
-      g.fill();
-      g.strokeStyle = COLORS.slopeEdge;
-      g.lineWidth = Math.max(1.5, c * 0.04);
-      g.beginPath();
-      g.moveTo(p1[0], p1[1]); g.lineTo(mx, my); g.lineTo(p2[0], p2[1]);
-      g.stroke();
-      break;
-    }
-    case 'goal': case 'goalA': case 'goalB': {
-      const col = kind === 'goal' ? COLORS.goal : kind === 'goalA' ? COLORS.footA : COLORS.footB;
-      g.save();
-      g.globalAlpha = 0.18;
-      g.fillStyle = col;
-      roundRect(g, px + m, py + m, c - 2 * m, c - 2 * m, c * 0.12);
-      g.fill();
-      g.globalAlpha = 1;
-      g.strokeStyle = col;
-      g.lineWidth = Math.max(2, c * 0.06);
-      roundRect(g, px + m, py + m, c - 2 * m, c - 2 * m, c * 0.12);
-      g.stroke();
-      g.restore();
-      break;
-    }
-    case 'item': {
-      // 宝石のようなひし形
-      const r = c * 0.24, cx = px + c / 2, cy = py + c / 2;
-      g.fillStyle = COLORS.stop;
-      g.beginPath();
-      g.moveTo(cx, cy - r); g.lineTo(cx + r, cy); g.lineTo(cx, cy + r); g.lineTo(cx - r, cy);
-      g.closePath(); g.fill();
-      g.fillStyle = 'rgba(255,255,255,0.45)';
-      g.beginPath();
-      g.moveTo(cx, cy - r); g.lineTo(cx + r * 0.45, cy - r * 0.15); g.lineTo(cx - r * 0.45, cy - r * 0.15);
-      g.closePath(); g.fill();
-      break;
-    }
-    case 'crumble': {
-      g.strokeStyle = 'rgba(0,0,0,0.45)';
-      g.lineWidth = Math.max(1, c * 0.035);
-      g.beginPath();
-      g.moveTo(px + c * 0.2, py + c * 0.25); g.lineTo(px + c * 0.45, py + c * 0.45);
-      g.lineTo(px + c * 0.4, py + c * 0.7); g.moveTo(px + c * 0.45, py + c * 0.45);
-      g.lineTo(px + c * 0.78, py + c * 0.4); g.moveTo(px + c * 0.6, py + c * 0.8);
-      g.lineTo(px + c * 0.7, py + c * 0.6);
-      g.stroke();
-      break;
-    }
-    case 'switch': {
-      g.fillStyle = COLORS.switchCol;
+    g.restore();
+  }
+  if (v.goal) {
+    const m = c * 0.16;
+    const col = v.goal === 'goal' ? COLORS.goal : v.goal === 'goalA' ? COLORS.footA : COLORS.footB;
+    g.save();
+    g.globalAlpha = 0.18;
+    g.fillStyle = col;
+    roundRect(g, px + m, py + m, c - 2 * m, c - 2 * m, c * 0.12);
+    g.fill();
+    g.globalAlpha = 1;
+    g.strokeStyle = col;
+    g.lineWidth = Math.max(2, c * 0.06);
+    roundRect(g, px + m, py + m, c - 2 * m, c - 2 * m, c * 0.12);
+    g.stroke();
+    g.restore();
+  }
+  if (v.switch) {
+    g.save();
+    g.fillStyle = COLORS.switchCol;
+    g.globalAlpha = 0.85;
+    g.beginPath(); g.arc(px + c / 2, py + c / 2, c * 0.2, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 1;
+    g.strokeStyle = COLORS.switchCol;
+    g.lineWidth = Math.max(1.5, c * 0.04);
+    g.beginPath(); g.arc(px + c / 2, py + c / 2, c * 0.29, 0, Math.PI * 2); g.stroke();
+    g.restore();
+  }
+  if (v.item) {
+    // 宝石のようなひし形
+    const r = c * 0.22, cx = px + c / 2, cy = py + c / 2;
+    g.fillStyle = COLORS.stop;
+    g.beginPath();
+    g.moveTo(cx, cy - r); g.lineTo(cx + r, cy); g.lineTo(cx, cy + r); g.lineTo(cx - r, cy);
+    g.closePath(); g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.45)';
+    g.beginPath();
+    g.moveTo(cx, cy - r); g.lineTo(cx + r * 0.45, cy - r * 0.15); g.lineTo(cx - r * 0.45, cy - r * 0.15);
+    g.closePath(); g.fill();
+  }
+  if (v.door) {
+    g.save();
+    if (v.doorClosed) {
       g.globalAlpha = 0.85;
-      g.beginPath(); g.arc(px + c / 2, py + c / 2, c * 0.22, 0, Math.PI * 2); g.fill();
+      g.fillStyle = COLORS.block;
+      g.fillRect(px, py, c, c);
       g.globalAlpha = 1;
       g.strokeStyle = COLORS.switchCol;
-      g.lineWidth = Math.max(1.5, c * 0.04);
-      g.beginPath(); g.arc(px + c / 2, py + c / 2, c * 0.32, 0, Math.PI * 2); g.stroke();
-      break;
-    }
-    case 'doorOpen': {
+      g.lineWidth = Math.max(2, c * 0.07);
+      for (let i = 1; i <= 3; i++) {
+        const x = px + c * i / 4;
+        g.beginPath(); g.moveTo(x, py + c * 0.12); g.lineTo(x, py + c * 0.88); g.stroke();
+      }
+    } else {
       g.strokeStyle = COLORS.switchCol;
       g.lineWidth = Math.max(1.5, c * 0.05);
       g.setLineDash([c * 0.1, c * 0.08]);
       g.strokeRect(px + c * 0.12, py + c * 0.12, c * 0.76, c * 0.76);
-      g.setLineDash([]);
-      break;
     }
-    case 'paint': {
-      if (opt.painted) {
-        g.fillStyle = COLORS.paint;
-        g.globalAlpha = 0.45;
-        g.fillRect(px + 2, py + 2, c - 4, c - 4);
-        g.globalAlpha = 1;
-      } else {
-        g.strokeStyle = COLORS.paint;
-        g.lineWidth = Math.max(1.5, c * 0.04);
-        g.strokeRect(px + c * 0.3, py + c * 0.3, c * 0.4, c * 0.4);
-      }
-      break;
-    }
+    g.restore();
   }
 }
 
@@ -1098,8 +1165,8 @@ function cellCenter(x, y) {
 
 function isNearOpen(level, x, y) {
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-    const k = baseKey(level, x + dx, y + dy);
-    if (k && k !== 'wall') return true;
+    const c = cellAt(level, x + dx, y + dy);
+    if (c && c.terrain !== 'wall') return true;
   }
   return false;
 }
@@ -1122,12 +1189,8 @@ function draw(now) {
   g.clearRect(0, 0, layout.w, layout.h);
 
   for (let y = 0; y < level.h; y++) for (let x = 0; x < level.w; x++) {
-    const key = effKey(level, s, x, y);
-    const idx = y * level.w + x;
-    drawTileKey(g, key, x * c, y * c, c, {
-      near: key === 'wall' && isNearOpen(level, x, y),
-      painted: key === 'paint' && s.painted[level.paintBit.get(idx)] === '1',
-    });
+    const v = cellView(level, s, x, y);
+    drawCell(g, v, x * c, y * c, c, { near: v.terrain === 'wall' && isNearOpen(level, x, y) });
   }
 
   // 足の位置（アニメーション中は動く足を弧に沿って補間）
@@ -1258,11 +1321,13 @@ window.addEventListener('resize', () => { resize(); editor.resize(); });
 /* =========================================================
  * ステージエディタ
  * ========================================================= */
+// 地形のツールは置き換え、ギミックのツールは重ねる（同じものをもう一度置くと外れる）
 const PALETTE = [
   'wall', 'floor', 'footA', 'footB', 'goal', 'goalA', 'goalB',
-  'triTL', 'triTR', 'triBL', 'triBR', 'stop', 'crumble', 'paint',
+  'triTL', 'triTR', 'triBL', 'triBR', 'item', 'crumble', 'paint',
   'peakU', 'peakD', 'peakR', 'peakL', 'switch', 'doorClosed', 'doorOpen',
 ];
+const newCell = (terrain = 'floor') => ({ terrain, mods: [] });
 
 const editor = {
   w: 7, h: 9,
@@ -1281,7 +1346,7 @@ const editor = {
     this.grid = [];
     for (let y = 0; y < h; y++) {
       const row = [];
-      for (let x = 0; x < w; x++) row.push(x === 0 || y === 0 || x === w - 1 || y === h - 1 ? 'wall' : 'floor');
+      for (let x = 0; x < w; x++) row.push(newCell(x === 0 || y === 0 || x === w - 1 || y === h - 1 ? 'wall' : 'floor'));
       this.grid.push(row);
     }
     this.a = { x: 1, y: 1 }; this.b = { x: 2, y: 1 };
@@ -1289,17 +1354,16 @@ const editor = {
   },
 
   loadStage(stage, customIndex = null) {
-    const rows = stage.map;
-    this.h = rows.length;
-    this.w = Math.max(...rows.map(r => r.length));
+    const { grid, w, h } = tokenizeStage(stage.map);
+    this.w = w; this.h = h;
     this.grid = []; this.a = null; this.b = null;
-    for (let y = 0; y < this.h; y++) {
+    for (let y = 0; y < h; y++) {
       const row = [];
-      for (let x = 0; x < this.w; x++) {
-        const ch = rows[y][x] || '#';
-        if (ch === 'A') this.a = { x, y };
-        if (ch === 'B') this.b = { x, y };
-        row.push(CHAR_TO_TILE[ch] || 'wall');
+      for (let x = 0; x < w; x++) {
+        const t = grid[y][x];
+        if (t.a) this.a = { x, y };
+        if (t.b) this.b = { x, y };
+        row.push({ terrain: t.terrain, mods: t.mods.slice() });
       }
       this.grid.push(row);
     }
@@ -1314,9 +1378,12 @@ const editor = {
     for (let y = 0; y < this.h; y++) {
       let line = '';
       for (let x = 0; x < this.w; x++) {
-        if (this.a && this.a.x === x && this.a.y === y) line += 'A';
-        else if (this.b && this.b.x === x && this.b.y === y) line += 'B';
-        else line += TILE_TYPES[this.grid[y][x]].char;
+        const c = this.grid[y][x];
+        line += cellToText({
+          terrain: c.terrain, mods: c.mods,
+          a: !!this.a && this.a.x === x && this.a.y === y,
+          b: !!this.b && this.b.x === x && this.b.y === y,
+        });
       }
       map.push(line);
     }
@@ -1341,7 +1408,7 @@ const editor = {
     const ng = [];
     for (let y = 0; y < nh; y++) {
       const row = [];
-      for (let x = 0; x < nw; x++) row.push(y < this.h && x < this.w ? this.grid[y][x] : 'wall');
+      for (let x = 0; x < nw; x++) row.push(y < this.h && x < this.w ? this.grid[y][x] : newCell('wall'));
       ng.push(row);
     }
     this.grid = ng; this.w = nw; this.h = nh;
@@ -1350,17 +1417,33 @@ const editor = {
     this.sync();
   },
 
+  /** なぞり始めのマスで「重ねる」か「外す」かを決める（ギミックのツールのとき） */
+  beginStroke(x, y) {
+    this.strokeMode = 'add';
+    const t = this.tool;
+    if (GIMMICKS[t] && x >= 0 && y >= 0 && x < this.w && y < this.h && this.grid[y][x].mods.includes(t)) this.strokeMode = 'remove';
+  },
+
   applyTool(x, y) {
     if (x < 0 || y < 0 || x >= this.w || y >= this.h) return;
     const t = this.tool;
+    const cell = this.grid[y][x];
     if (t === 'footA' || t === 'footB') {
       const key = t === 'footA' ? 'a' : 'b', other = t === 'footA' ? 'b' : 'a';
       if (this[other] && this[other].x === x && this[other].y === y) this[other] = null;
       this[key] = { x, y };
-      this.grid[y][x] = 'floor'; // A/B のマスは床扱い
+      if (cell.terrain !== 'floor') { cell.terrain = 'floor'; cell.mods = []; }
+    } else if (GIMMICKS[t]) {
+      // ギミックは床の上に重ねる。同じ種類（ゴール同士・扉同士）は入れ替え
+      if (this.strokeMode === 'remove') { cell.mods = cell.mods.filter(m => m !== t); return; }
+      if (cell.terrain !== 'floor') { cell.terrain = 'floor'; cell.mods = []; }
+      cell.mods = cell.mods.filter(m => GIMMICKS[m].group !== GIMMICKS[t].group);
+      cell.mods.push(t);
     } else {
-      this.grid[y][x] = t;
-      for (const k of ['a', 'b']) if (this[k] && this[k].x === x && this[k].y === y) this[k] = null;
+      // 地形は置き換え。「床」はギミックも消す（消しゴム）
+      cell.terrain = t;
+      cell.mods = [];
+      if (t !== 'floor') for (const k of ['a', 'b']) if (this[k] && this[k].x === x && this[k].y === y) this[k] = null;
     }
   },
 
@@ -1384,7 +1467,8 @@ const editor = {
     const g = L.g, c = L.cell;
     g.clearRect(0, 0, L.w, L.h);
     for (let y = 0; y < this.h; y++) for (let x = 0; x < this.w; x++) {
-      drawTileKey(g, this.grid[y][x], x * c, y * c, c, { wallMode: 'always' });
+      const cell = this.grid[y][x];
+      drawCell(g, staticView(cell.terrain, cell.mods), x * c, y * c, c, { wallMode: 'always' });
     }
     // グリッド線
     g.strokeStyle = 'rgba(255,255,255,0.08)';
@@ -1431,12 +1515,13 @@ function buildPalette() {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     let label;
     if (key === 'footA' || key === 'footB') {
-      drawTileKey(g, 'floor', 0, 0, 30);
+      drawCell(g, staticView('floor'), 0, 0, 30);
       drawFoot(g, 15, 15, 30, key === 'footA' ? COLORS.footA : COLORS.footB);
       label = key === 'footA' ? '足A' : '足B';
     } else {
-      drawTileKey(g, key, 0, 0, 30, { wallMode: 'always' });
-      label = TILE_TYPES[key].label;
+      const v = TERRAINS[key] ? staticView(key) : staticView('floor', [key]);
+      drawCell(g, v, 0, 0, 30, { wallMode: 'always' });
+      label = (TERRAINS[key] || GIMMICKS[key]).label;
     }
     div.appendChild(cv);
     const span = document.createElement('span');
@@ -1491,6 +1576,7 @@ edCanvas.addEventListener('pointerdown', ev => {
   editor.snapshot();
   editor.painting = true;
   const p = edCell(ev);
+  editor.beginStroke(p.x, p.y);
   editor.lastCell = p.x + ',' + p.y;
   editor.applyTool(p.x, p.y);
   editor.draw();
@@ -1605,7 +1691,7 @@ el('btnEdImport').addEventListener('click', () => {
   openModal('読み込み', '書き出したテキスト、またはマップの行（# . A B など）を貼り付けてください', '', '読み込む', text => {
     const st = parseStageText(text);
     if (!st.map.length) { alert('マップが見つかりません'); return false; }
-    for (const row of st.map) for (const ch of row) if (!CHAR_TO_TILE[ch]) { alert(`未知のマス文字 "${ch}"`); return false; }
+    try { tokenizeStage(st.map); } catch (err) { alert(err.message); return false; }
     editor.snapshot();
     const undo = editor.undoStack;
     editor.loadStage(st, null);
