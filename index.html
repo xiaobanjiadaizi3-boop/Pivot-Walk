@@ -174,6 +174,11 @@ function arrowGimmick(char, dx, dy, label) {
   };
 }
 
+/** 一方通行。足はこの向き (dx, dy) に進む動きでしか、このマスに入ることも出ることもできない */
+function onewayGimmick(char, dx, dy, label) {
+  return { char, label, group: 'oneway', oneway: { x: dx, y: dy } };
+}
+
 const GIMMICKS = {
   goal:  { char: 'G', label: 'ゴール', group: 'goal', goalFor: ['A', 'B'] },
   goalA: { char: 'R', label: 'A専用',  group: 'goal', goalFor: ['A'] },
@@ -188,6 +193,11 @@ const GIMMICKS = {
   arrowE: arrowGimmick('e',  1,  0, '矢印 →'),
   arrowS: arrowGimmick('s',  0,  1, '矢印 ↓'),
   arrowW: arrowGimmick('w', -1,  0, '矢印 ←'),
+  // 一方通行（テンキーの向き）
+  onewayN: onewayGimmick('8',  0, -1, '一方通行↑'),
+  onewayE: onewayGimmick('6',  1,  0, '一方通行→'),
+  onewayS: onewayGimmick('2',  0,  1, '一方通行↓'),
+  onewayW: onewayGimmick('4', -1,  0, '一方通行←'),
   // 崩れる床: 足が離れると穴になる（穴には乗れないが、回転で上を通過はできる）
   crumble: {
     char: 'C', label: '崩れる床', group: 'crumble',
@@ -204,7 +214,8 @@ const GIMMICKS = {
   },
 };
 // 足が乗った／離れたときに効果を処理する順番
-const GIMMICK_ORDER = ['item', 'arrowN', 'arrowE', 'arrowS', 'arrowW', 'paint', 'switch', 'crumble', 'goal', 'goalA', 'goalB', 'doorClosed', 'doorOpen'];
+const GIMMICK_ORDER = ['item', 'arrowN', 'arrowE', 'arrowS', 'arrowW', 'paint', 'switch', 'crumble', 'goal', 'goalA', 'goalB', 'doorClosed', 'doorOpen',
+  'onewayN', 'onewayE', 'onewayS', 'onewayW'];
 
 const CHAR_TO_TERRAIN = {}, CHAR_TO_GIMMICK = {};
 for (const [k, t] of Object.entries(TERRAINS)) CHAR_TO_TERRAIN[t.char] = k;
@@ -462,6 +473,24 @@ const STAGES = [
     '#AB....#',
     '########',
   ]},
+  { name: '一方通行', map: [
+    '######',
+    '#4.6G#',
+    '#...G#',
+    '#..###',
+    '#...A#',
+    '#4..B#',
+    '######',
+  ]},
+  { name: '一方通行の迷路', map: [
+    '#######',
+    '#G.6..#',
+    '#G.8.8#',
+    '#.624.#',
+    '#...AB#',
+    '#2.2.v#',
+    '#######',
+  ]},
 ];
 
 /* =========================================================
@@ -547,6 +576,7 @@ function cellView(level, s, x, y) {
     arrow: (() => { const m = c.mods.find(k => GIMMICKS[k].group === 'arrow'); return m && s.arrows[level.arrowBit.get(idx)] !== '1' ? m : null; })(),
     paint: has('paint'), painted: has('paint') && s.painted[level.paintBit.get(idx)] === '1',
     switch: has('switch'), goal: c.goal,
+    oneway: c.mods.find(k => GIMMICKS[k].group === 'oneway') || null,
   };
 }
 function canStand(level, s, x, y) {
@@ -588,8 +618,23 @@ function applyMove(level, s, mv) {
   return r;
 }
 
+/** 一方通行の決まりを守っているか（動いた足が、出たマス・入ったマスの矢印の向きに進んでいるか） */
+function onewayOk(level, prev, ns) {
+  for (const k of ['a', 'b']) {
+    const dx = ns[k].x - prev[k].x, dy = ns[k].y - prev[k].y;
+    if (!dx && !dy) continue;
+    for (const p of [prev[k], ns[k]]) {
+      const c = cellAt(level, p.x, p.y);
+      const m = c && c.mods.find(g => GIMMICKS[g].group === 'oneway');
+      if (m && dx * GIMMICKS[m].oneway.x + dy * GIMMICKS[m].oneway.y <= 0) return false;
+    }
+  }
+  return true;
+}
+
 /** prev → ns で足が離れた／乗ったマスの効果を起こし、矢印でずれるなら続けて処理する */
 function settle(level, prev, ns, steps, depth) {
+  if (!onewayOk(level, prev, ns)) return null;
   // 足がいなくなったマスは「離れた」、新しく足が来たマスは「乗った」として効果を起こす
   const same = (p, q) => p.x === q.x && p.y === q.y;
   const before = [prev.a, prev.b], after = [ns.a, ns.b];
@@ -805,6 +850,7 @@ const COLORS = {
   footB: '#3a86ff',
   stop: '#2ec4b6',
   arrow: '#f4a340',
+  oneway: 'rgba(200, 206, 222, 0.55)',
   switchCol: '#b388ff',
   paint: '#8bd17c',
   crumble: '#5a4a3a',
@@ -828,7 +874,8 @@ function staticView(terrain, mods = []) {
   const door = mods.find(m => GIMMICKS[m].group === 'door') || null;
   return {
     terrain, crumble: has('crumble'), broken: false, door, doorClosed: door === 'doorClosed',
-    item: has('item'), arrow: mods.find(m => GIMMICKS[m].group === 'arrow') || null, paint: has('paint'), painted: false, switch: has('switch'),
+    item: has('item'), arrow: mods.find(m => GIMMICKS[m].group === 'arrow') || null,
+    oneway: mods.find(m => GIMMICKS[m].group === 'oneway') || null, paint: has('paint'), painted: false, switch: has('switch'),
     goal: mods.find(m => GIMMICKS[m].group === 'goal') || null,
   };
 }
@@ -890,6 +937,21 @@ function drawCell(g, v, px, py, c, opt = {}) {
     return;
   }
   // ---- ギミック（重ねて描く） ----
+  if (v.oneway) {
+    // 床に描いた「≫」（向き = 通れる方向）
+    const { x: dx, y: dy } = GIMMICKS[v.oneway].oneway;
+    const cx = px + c / 2, cy = py + c / 2;
+    const rot = (x, y) => [cx + (x * dx - y * dy) * c, cy + (x * dy + y * dx) * c]; // (1,0) を通れる向きに回す
+    g.save();
+    g.strokeStyle = COLORS.oneway;
+    g.lineWidth = Math.max(2, c * 0.07);
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    for (const off of [-0.13, 0.13]) {
+      const [x1, y1] = rot(off - 0.11, -0.2), [x2, y2] = rot(off + 0.11, 0), [x3, y3] = rot(off - 0.11, 0.2);
+      g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.lineTo(x3, y3); g.stroke();
+    }
+    g.restore();
+  }
   if (v.crumble && !v.broken) {
     g.strokeStyle = 'rgba(0,0,0,0.45)';
     g.lineWidth = Math.max(1, c * 0.035);
